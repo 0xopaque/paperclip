@@ -530,12 +530,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // is present, valid, and unexpired before spawning any CLI subprocess. Returns
   // immediately on failure — no quota burned, agent status stays idle (not error).
   if (!executionTargetIsRemote && billingType === "subscription") {
-    const authGate = await readClaudeLocalAuthGate();
+    // Resolve the auth-state path from the merged adapter env (same source as billingType),
+    // not process.env alone — otherwise an install that configures the path via adapter env
+    // is silently ignored and the gate checks the default location.
+    const configuredAuthStatePath = effectiveEnv.CLAUDE_LOCAL_AUTH_STATE_PATH || undefined;
+    const authGate = await readClaudeLocalAuthGate(configuredAuthStatePath);
     if (!authGate.ok) {
       const message =
         `Claude local auth preflight failed (${authGate.reason}).` +
         ` Ensure your auth refresh script has run and written a valid auth-state file` +
-        ` (${process.env.CLAUDE_LOCAL_AUTH_STATE_PATH ?? DEFAULT_AUTH_STATE_PATH}).`;
+        ` (${configuredAuthStatePath ?? DEFAULT_AUTH_STATE_PATH}).`;
       await onLog("stderr", `[paperclip] ${message}\n`);
       const authGateMeta: Record<string, unknown> = authGate.state
         ? { ...pickAuthStateMeta(authGate.state), reason: authGate.reason }
