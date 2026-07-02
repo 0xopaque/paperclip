@@ -204,6 +204,20 @@ export async function readClaudeLocalAuthGate(
   return { ok: true };
 }
 
+// The auth-state file is parsed from disk (`JSON.parse(...) as ClaudeLocalAuthState`), so at
+// runtime it may carry fields beyond the declared interface — whatever the external refresh
+// mechanism wrote (potentially token/session/probe material). Never spread the raw object into
+// metadata that is persisted or emitted; allowlist only the known-safe diagnostic fields.
+function pickAuthStateMeta(state: ClaudeLocalAuthState): Record<string, unknown> {
+  const meta: Record<string, unknown> = {};
+  if (state.ok !== undefined) meta.ok = state.ok;
+  if (state.checkedAt !== undefined) meta.checkedAt = state.checkedAt;
+  if (state.notAfter !== undefined) meta.notAfter = state.notAfter;
+  if (state.storesMatch !== undefined) meta.storesMatch = state.storesMatch;
+  if (state.probe !== undefined) meta.probe = { ok: state.probe?.ok };
+  return meta;
+}
+
 async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<ClaudeRuntimeConfig> {
   const { runId, agent, config, context, runtimeCommandSpec, executionTarget, authToken } = input;
   const onLog = input.onLog ?? (async () => {});
@@ -519,7 +533,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ` (${process.env.CLAUDE_LOCAL_AUTH_STATE_PATH ?? DEFAULT_AUTH_STATE_PATH}).`;
       await onLog("stderr", `[paperclip] ${message}\n`);
       const authGateMeta: Record<string, unknown> = authGate.state
-        ? { ...authGate.state, reason: authGate.reason }
+        ? { ...pickAuthStateMeta(authGate.state), reason: authGate.reason }
         : { reason: authGate.reason, ...(authGate.detail ? { detail: authGate.detail } : {}) };
       if (onMeta) {
         await onMeta({

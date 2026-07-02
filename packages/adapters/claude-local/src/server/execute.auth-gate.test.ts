@@ -210,6 +210,37 @@ describe("claude_local auth preflight gate", () => {
     expect(metaCalls[0]![0].authGate).toMatchObject({ reason: "auth_state_missing" });
   });
 
+  it("does NOT leak unknown auth-state file fields (e.g. tokens) into onMeta or resultJson", async () => {
+    // The refresh mechanism could write extra fields; the gate must allowlist, not passthrough.
+    await writeFile(
+      authStatePath,
+      JSON.stringify({
+        ...validAuthState(),
+        ok: false,
+        reason: "token_expired",
+        accessToken: "secret-token-should-never-surface",
+        sessionId: "sess-should-never-surface",
+        probe: { ok: false, rawResponse: "probe-secret-should-never-surface" },
+      }),
+      "utf-8",
+    );
+    const metaCalls: Parameters<NonNullable<Parameters<typeof execute>[0]["onMeta"]>>[] = [];
+    const onMeta = vi.fn(async (...args: Parameters<NonNullable<Parameters<typeof execute>[0]["onMeta"]>>) => {
+      metaCalls.push(args);
+    });
+    const result = await execute({ ...makeCtx(authStatePath), onMeta });
+
+    const authGate = metaCalls[0]![0].authGate as Record<string, unknown>;
+    expect(authGate).toMatchObject({ reason: "token_expired", ok: false, storesMatch: true });
+    expect(authGate).not.toHaveProperty("accessToken");
+    expect(authGate).not.toHaveProperty("sessionId");
+    // probe is reconstructed to { ok } only — no nested secret survives.
+    expect(authGate.probe).toEqual({ ok: false });
+
+    const serialized = JSON.stringify({ meta: authGate, resultJson: result.resultJson });
+    expect(serialized).not.toContain("should-never-surface");
+  });
+
   it("gate is DORMANT when nothing is configured and the default file is absent (no regression for existing installs)", async () => {
     delete process.env.CLAUDE_LOCAL_AUTH_STATE_PATH;
     const missingDefault = path.join(tmpDir, "does-not-exist", "claude-auth-state.json");
