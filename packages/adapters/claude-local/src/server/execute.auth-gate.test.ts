@@ -241,6 +241,20 @@ describe("claude_local auth preflight gate", () => {
     expect(serialized).not.toContain("should-never-surface");
   });
 
+  it("does NOT leak malformed-file contents via the JSON parse error message", async () => {
+    // A corrupt auth-state file mid-write could embed token material; the SyntaxError message
+    // from JSON.parse can include an input snippet, so `detail` must not carry it.
+    await writeFile(authStatePath, '{ "accessToken": "secret-token-should-never-surface", ', "utf-8");
+    const metaCalls: Parameters<NonNullable<Parameters<typeof execute>[0]["onMeta"]>>[] = [];
+    const onMeta = vi.fn(async (...args: Parameters<NonNullable<Parameters<typeof execute>[0]["onMeta"]>>) => {
+      metaCalls.push(args);
+    });
+    const result = await execute({ ...makeCtx(authStatePath), onMeta });
+    expect(result.errorCode).toBe("auth_preflight_failed");
+    const serialized = JSON.stringify({ meta: metaCalls[0]![0].authGate, resultJson: result.resultJson });
+    expect(serialized).not.toContain("should-never-surface");
+  });
+
   it("gate is DORMANT when nothing is configured and the default file is absent (no regression for existing installs)", async () => {
     delete process.env.CLAUDE_LOCAL_AUTH_STATE_PATH;
     const missingDefault = path.join(tmpDir, "does-not-exist", "claude-auth-state.json");

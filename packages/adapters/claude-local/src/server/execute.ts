@@ -171,17 +171,22 @@ export async function readClaudeLocalAuthGate(
   try {
     state = JSON.parse(await fs.readFile(filePath, "utf-8")) as ClaudeLocalAuthState;
   } catch (error) {
-    const isMissing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
+    const err = error as NodeJS.ErrnoException;
+    const isMissing = err?.code === "ENOENT";
     if (isMissing && !explicitPath) {
       // Nothing configured and nothing at the default location: the gate is
       // dormant. This preserves existing behavior for installs that have
       // never set up an auth-state publisher.
       return { ok: true, reason: "unconfigured" };
     }
+    // Only a filesystem error message (errno/path) is safe to surface. A JSON parse error
+    // message can embed a snippet of the file's raw contents — potentially token/session
+    // material — so never persist it in metadata/resultJson.
+    const isFsError = typeof err?.code === "string";
     return {
       ok: false,
-      reason: "auth_state_missing",
-      detail: error instanceof Error ? error.message : String(error),
+      reason: isFsError ? "auth_state_missing" : "auth_state_invalid",
+      detail: isFsError && error instanceof Error ? error.message : undefined,
       state: null,
     };
   }
