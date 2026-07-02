@@ -65,7 +65,7 @@ export interface AdapterRuntimeServiceReport {
   healthStatus?: "unknown" | "healthy" | "unhealthy";
 }
 
-export type AdapterExecutionErrorFamily = "transient_upstream" | "model_refusal";
+export type AdapterExecutionErrorFamily = "transient_upstream" | "model_refusal" | "auth_preflight";
 
 export interface AdapterExecutionResult {
   exitCode: number | null;
@@ -118,6 +118,8 @@ export interface AdapterInvocationMeta {
   prompt?: string;
   promptMetrics?: Record<string, number>;
   context?: Record<string, unknown>;
+  /** Populated when the adapter aborts due to an auth preflight failure. */
+  authGate?: Record<string, unknown>;
 }
 
 export interface AdapterExecutionContext {

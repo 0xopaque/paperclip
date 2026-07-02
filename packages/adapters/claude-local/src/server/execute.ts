@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
@@ -134,6 +135,60 @@ function isBedrockAuth(env: Record<string, string>): boolean {
 function resolveClaudeBillingType(env: Record<string, string>): "api" | "subscription" | "metered_api" {
   if (isBedrockAuth(env)) return "metered_api";
   return hasNonEmptyEnvValue(env, "ANTHROPIC_API_KEY") ? "api" : "subscription";
+}
+
+// Default auth-state path. Override via CLAUDE_LOCAL_AUTH_STATE_PATH env var.
+// The state file is written by the deployer's auth refresh mechanism (e.g.
+// a cron/launchd job that validates the Claude CLI token and writes JSON).
+// Gate logic: absent file = defer (safe fail); stale/expired = defer.
+const DEFAULT_AUTH_STATE_PATH = path.join(os.homedir(), ".openclaw", "claude-auth-state.json");
+
+interface ClaudeLocalAuthState {
+  ok?: boolean;
+  reason?: string;
+  checkedAt?: string;
+  notAfter?: string;
+  storesMatch?: boolean;
+  probe?: { ok?: boolean };
+}
+
+type ClaudeLocalAuthGateResult =
+  | { ok: true }
+  | { ok: false; reason: string; detail?: string; state: ClaudeLocalAuthState | null };
+
+async function readClaudeLocalAuthGate(
+  authStatePath?: string,
+): Promise<ClaudeLocalAuthGateResult> {
+  const filePath =
+    authStatePath ?? process.env.CLAUDE_LOCAL_AUTH_STATE_PATH ?? DEFAULT_AUTH_STATE_PATH;
+  let state: ClaudeLocalAuthState;
+  try {
+    state = JSON.parse(await fs.readFile(filePath, "utf-8")) as ClaudeLocalAuthState;
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "auth_state_missing",
+      detail: error instanceof Error ? error.message : String(error),
+      state: null,
+    };
+  }
+  if (!state || typeof state !== "object") {
+    return { ok: false, reason: "auth_state_invalid", state: null };
+  }
+  if (state.ok !== true) {
+    return { ok: false, reason: state.reason ?? "auth_state_not_ok", state };
+  }
+  if (state.storesMatch !== true) {
+    return { ok: false, reason: "auth_state_store_mismatch", state };
+  }
+  if (state.probe?.ok !== true) {
+    return { ok: false, reason: "auth_probe_not_ok", state };
+  }
+  const notAfterMs = state.notAfter ? Date.parse(state.notAfter) : NaN;
+  if (!Number.isFinite(notAfterMs) || notAfterMs <= Date.now()) {
+    return { ok: false, reason: "auth_state_expired", state };
+  }
+  return { ok: true };
 }
 
 async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<ClaudeRuntimeConfig> {
@@ -438,6 +493,48 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ),
   );
   const billingType = resolveClaudeBillingType(effectiveEnv);
+
+  // Auth preflight gate: for local subscription runs, verify the auth state file
+  // is present, valid, and unexpired before spawning any CLI subprocess. Returns
+  // immediately on failure — no quota burned, agent status stays idle (not error).
+  if (!executionTargetIsRemote && billingType === "subscription") {
+    const authGate = await readClaudeLocalAuthGate();
+    if (!authGate.ok) {
+      const message =
+        `Claude local auth preflight failed (${authGate.reason}).` +
+        ` Ensure your auth refresh script has run and written a valid auth-state file` +
+        ` (${process.env.CLAUDE_LOCAL_AUTH_STATE_PATH ?? DEFAULT_AUTH_STATE_PATH}).`;
+      await onLog("stderr", `[paperclip] ${message}\n`);
+      const authGateMeta: Record<string, unknown> = authGate.state
+        ? { reason: authGate.reason, ...authGate.state }
+        : { reason: authGate.reason, ...(authGate.detail ? { detail: authGate.detail } : {}) };
+      if (onMeta) {
+        await onMeta({
+          adapterType: "claude_local",
+          command: resolvedCommand,
+          cwd: effectiveExecutionCwd,
+          commandArgs: [],
+          commandNotes: [message],
+          env: loggedEnv,
+          prompt: "",
+          promptMetrics: { agentPromptChars: 0, taskContextChars: 0, heartbeatPromptChars: 0 },
+          authGate: authGateMeta,
+          context,
+        });
+      }
+      return {
+        exitCode: 1,
+        signal: null,
+        timedOut: false,
+        errorMessage: message,
+        errorCode: "auth_preflight_failed",
+        errorFamily: "auth_preflight",
+        resultJson: { errorFamily: "auth_preflight", reason: authGate.reason, state: authGateMeta },
+        clearSession: false,
+      };
+    }
+  }
+
   const claudeSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredSkillNames = new Set(resolveClaudeDesiredSkillNames(config, claudeSkillEntries));
   // When instructionsFilePath is configured, build a stable content-addressed
