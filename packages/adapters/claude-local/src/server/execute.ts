@@ -519,7 +519,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ` (${process.env.CLAUDE_LOCAL_AUTH_STATE_PATH ?? DEFAULT_AUTH_STATE_PATH}).`;
       await onLog("stderr", `[paperclip] ${message}\n`);
       const authGateMeta: Record<string, unknown> = authGate.state
-        ? { reason: authGate.reason, ...authGate.state }
+        ? { ...authGate.state, reason: authGate.reason }
         : { reason: authGate.reason, ...(authGate.detail ? { detail: authGate.detail } : {}) };
       if (onMeta) {
         await onMeta({
