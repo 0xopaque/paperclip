@@ -37,7 +37,7 @@ vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
   return { ...actual, runChildProcess };
 });
 
-import { execute } from "./execute.js";
+import { execute, readClaudeLocalAuthGate } from "./execute.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -208,5 +208,26 @@ describe("claude_local auth preflight gate", () => {
     expect(onMeta).toHaveBeenCalledOnce();
     expect(metaCalls[0]).toBeDefined();
     expect(metaCalls[0]![0].authGate).toMatchObject({ reason: "auth_state_missing" });
+  });
+
+  it("gate is DORMANT when nothing is configured and the default file is absent (no regression for existing installs)", async () => {
+    delete process.env.CLAUDE_LOCAL_AUTH_STATE_PATH;
+    const missingDefault = path.join(tmpDir, "does-not-exist", "claude-auth-state.json");
+    const gate = await readClaudeLocalAuthGate(undefined, missingDefault);
+    expect(gate.ok).toBe(true);
+    expect(gate.ok && gate.reason).toBe("unconfigured");
+  });
+
+  it("gate fails LOUDLY when an explicitly configured path is missing (misconfiguration is surfaced)", async () => {
+    const gate = await readClaudeLocalAuthGate(path.join(tmpDir, "nope.json"));
+    expect(gate.ok).toBe(false);
+    if (!gate.ok) expect(gate.reason).toBe("auth_state_missing");
+  });
+
+  it("treats an empty CLAUDE_LOCAL_AUTH_STATE_PATH as unset, not as an explicit path", async () => {
+    process.env.CLAUDE_LOCAL_AUTH_STATE_PATH = "";
+    const missingDefault = path.join(tmpDir, "also-does-not-exist", "claude-auth-state.json");
+    const gate = await readClaudeLocalAuthGate(undefined, missingDefault);
+    expect(gate.ok).toBe(true);
   });
 });

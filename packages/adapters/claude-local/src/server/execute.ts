@@ -140,7 +140,10 @@ function resolveClaudeBillingType(env: Record<string, string>): "api" | "subscri
 // Default auth-state path. Override via CLAUDE_LOCAL_AUTH_STATE_PATH env var.
 // The state file is written by the deployer's auth refresh mechanism (e.g.
 // a cron/launchd job that validates the Claude CLI token and writes JSON).
-// Gate logic: absent file = defer (safe fail); stale/expired = defer.
+// Gate logic: UNCONFIGURED (no explicit path, nothing at the default location)
+// = gate dormant, run proceeds — existing installs are unaffected. An explicitly
+// configured path that cannot be read = misconfiguration, fails loudly.
+// Configured + stale/expired/invalid = defer (safe fail).
 const DEFAULT_AUTH_STATE_PATH = path.join(os.homedir(), ".openclaw", "claude-auth-state.json");
 
 interface ClaudeLocalAuthState {
@@ -153,18 +156,28 @@ interface ClaudeLocalAuthState {
 }
 
 type ClaudeLocalAuthGateResult =
-  | { ok: true }
+  | { ok: true; reason?: "unconfigured" }
   | { ok: false; reason: string; detail?: string; state: ClaudeLocalAuthState | null };
 
-async function readClaudeLocalAuthGate(
+export async function readClaudeLocalAuthGate(
   authStatePath?: string,
+  defaultAuthStatePath: string = DEFAULT_AUTH_STATE_PATH,
 ): Promise<ClaudeLocalAuthGateResult> {
-  const filePath =
-    authStatePath ?? process.env.CLAUDE_LOCAL_AUTH_STATE_PATH ?? DEFAULT_AUTH_STATE_PATH;
+  // Empty-string env values count as unset, not as an explicit path.
+  const explicitPath =
+    authStatePath || process.env.CLAUDE_LOCAL_AUTH_STATE_PATH || undefined;
+  const filePath = explicitPath ?? defaultAuthStatePath;
   let state: ClaudeLocalAuthState;
   try {
     state = JSON.parse(await fs.readFile(filePath, "utf-8")) as ClaudeLocalAuthState;
   } catch (error) {
+    const isMissing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
+    if (isMissing && !explicitPath) {
+      // Nothing configured and nothing at the default location: the gate is
+      // dormant. This preserves existing behavior for installs that have
+      // never set up an auth-state publisher.
+      return { ok: true, reason: "unconfigured" };
+    }
     return {
       ok: false,
       reason: "auth_state_missing",
