@@ -81,6 +81,9 @@ export interface CommandManagedRuntimeRunner {
     env?: Record<string, string>;
     stdin?: string;
     timeoutMs?: number;
+    /** Optional execution deadline for a session command, separate from an
+     * individual provider observation timeout. Zero means no command deadline. */
+    commandTimeoutMs?: number;
     onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
     onSpawn?: (meta: { pid: number; startedAt: string }) => Promise<void>;
     /**

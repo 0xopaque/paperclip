@@ -278,6 +278,9 @@ export interface AdapterExecutionTargetProcessOptions {
   stdin?: string;
   timeoutSec: number;
   graceSec: number;
+  /** Sandbox-only: request the provider's persistent process session for a
+   * long-lived command. The host still gates this on provider capabilities. */
+  useSession?: boolean;
   onLog: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
   onRuntimeProgress?: RuntimeStatusSink;
   onSpawn?: (meta: { pid: number; processGroupId: number | null; startedAt: string }) => Promise<void>;
@@ -881,6 +884,8 @@ export async function runAdapterExecutionTargetProcess(
         env,
         stdin: options.stdin,
         timeoutMs: options.timeoutSec > 0 ? options.timeoutSec * 1000 : target.timeoutMs ?? undefined,
+        ...(options.useSession !== undefined ? { useSession: options.useSession } : {}),
+        ...(options.useSession === true ? { commandTimeoutMs: Math.max(0, options.timeoutSec) * 1000 } : {}),
         // The tail loop already streams incremental chunks; suppress the
         // runner's end-of-run batched onLog to avoid duplicate log bytes.
         onLog: runLogTail ? undefined : options.onLog,

@@ -1927,6 +1927,53 @@ type SessionLogStreamResult = {
 class SessionCommandDeadlineError extends Error {}
 class SessionObservationTimeoutError extends Error {}
 
+function createCommandDeadline(timeoutMs: number | undefined) {
+  if (timeoutMs === undefined || timeoutMs === 0) return undefined;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 2_147_483_647) {
+    throw new Error("Invalid session command timeout");
+  }
+  let expired = false;
+  const dueAt = Date.now() + timeoutMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    expired = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    expired: () => expired,
+    remainingMs: () => Math.max(0, dueAt - Date.now()),
+    race: async <T>(action: () => Promise<T>): Promise<T> => {
+      if (expired) throw new SessionCommandDeadlineError();
+      let rejectDeadline!: (error: SessionCommandDeadlineError) => void;
+      const deadline = new Promise<never>((_resolve, reject) => { rejectDeadline = reject; });
+      const onAbort = () => rejectDeadline(new SessionCommandDeadlineError());
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        return await Promise.race([action(), deadline]);
+      } finally {
+        // Retain only active observations. A shared pending promise would keep
+        // every finished poll and its result until a long command ends.
+        controller.signal.removeEventListener("abort", onAbort);
+      }
+    },
+    clear: () => clearTimeout(timer),
+  };
+}
+type CommandDeadline = ReturnType<typeof createCommandDeadline>;
+function withinCommandDeadline<T>(deadline: CommandDeadline, action: () => Promise<T>): Promise<T> {
+  return deadline ? deadline.race(action) : action();
+}
+
+async function sleepWithinCommandDeadline(deadline: CommandDeadline, delayMs: number): Promise<void> {
+  if (!deadline) return await sleep(delayMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await deadline.race(() => new Promise<void>((resolve) => { timer = setTimeout(resolve, delayMs); }));
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function beforeSessionDeadline<T>(deadlineMs: number, action: () => Promise<T>): Promise<T> {
   const remainingMs = deadlineMs - Date.now();
   if (remainingMs <= 0) throw new SessionCommandDeadlineError();
@@ -1943,12 +1990,18 @@ async function beforeSessionDeadline<T>(deadlineMs: number, action: () => Promis
   }
 }
 
-// A provider operation timeout bounds one observation, not a healthy stream's
-// lifetime. The caller's RPC/run guard and session teardown own that lifetime.
-async function observeSessionCommand<T>(timeoutMs: number, action: () => Promise<T>): Promise<T> {
+// A provider operation timeout bounds one observation. An explicit command
+// deadline also bounds the stream; existing callers retain their run/Stop guard.
+async function observeSessionCommand<T>(timeoutMs: number, action: () => Promise<T>, commandDeadline?: CommandDeadline): Promise<T> {
   try {
+    // Use the earlier shared command timer instead of leaving a longer
+    // observation timer alive after the command has already settled.
+    if (commandDeadline && commandDeadline.remainingMs() <= timeoutMs) {
+      return await commandDeadline.race(action);
+    }
     return await beforeSessionDeadline(Date.now() + timeoutMs, action);
   } catch (error) {
+    if (commandDeadline?.expired()) throw new SessionCommandDeadlineError();
     if (error instanceof SessionCommandDeadlineError || error instanceof DaytonaTimeoutError) {
       throw new SessionObservationTimeoutError();
     }
@@ -1966,6 +2019,7 @@ async function runSessionLogStream(
   commandId: string,
   timeoutMs: number,
   buffer: ReturnType<typeof createSessionStreamBuffer>,
+  commandDeadline?: CommandDeadline,
 ): Promise<SessionLogStreamResult> {
   let reconnects = 0;
   let pollUntilExit = false;
@@ -1980,14 +2034,14 @@ async function runSessionLogStream(
       idleTimer = setTimeout(signalIdle, SESSION_LOG_STREAM_IDLE_MS);
     };
     const receive = (stream: "stdout" | "stderr", chunk: string) => {
-      if (!acceptingOutput || !chunk) return;
+      if (!acceptingOutput || commandDeadline?.expired() || !chunk) return;
       armIdleTimer();
       if (stream === "stdout") buffer.onStdout(chunk);
       else buffer.onStderr(chunk);
     };
     try {
       armIdleTimer();
-      const outcome = await Promise.race([
+      const outcome = await withinCommandDeadline(commandDeadline, () => Promise.race([
         sandbox.process.getSessionCommandLogs(
           sessionId,
           commandId,
@@ -1995,7 +2049,7 @@ async function runSessionLogStream(
           (chunk) => receive("stderr", chunk),
         ).then(() => "closed" as const),
         idle,
-      ]);
+      ]));
       if (outcome === "idle") {
         // Do not wait for the abandoned socket or open another one. The SDK
         // exposes no cancellation handle. Fence its callbacks before the
@@ -2004,7 +2058,8 @@ async function runSessionLogStream(
       }
       streamClosed = true;
       pollUntilExit = true;
-    } catch {
+    } catch (error) {
+      if (error instanceof SessionCommandDeadlineError) throw error;
       // The command can still be running after a log transport failure.
     } finally {
       // The SDK exposes no cancellation handle for this socket. Session
@@ -2013,7 +2068,7 @@ async function runSessionLogStream(
       clearTimeout(idleTimer);
     }
     if (streamClosed) {
-      const exitCode = await readSessionExitCode(sandbox, sessionId, commandId, timeoutMs);
+      const exitCode = await readSessionExitCode(sandbox, sessionId, commandId, timeoutMs, commandDeadline);
       if (exitCode !== null) return { exitCode, pollUntilExit, buffer };
     }
     if (reconnects >= MAX_SESSION_STREAM_RECONNECTS) {
@@ -2033,14 +2088,15 @@ async function readSessionExitCode(
   sessionId: string,
   commandId: string,
   timeoutMs: number,
+  commandDeadline?: CommandDeadline,
 ): Promise<number | null> {
-  const first = await observeSessionCommand(timeoutMs, () => sandbox.process.getSessionCommand(sessionId, commandId));
+  const first = await observeSessionCommand(timeoutMs, () => sandbox.process.getSessionCommand(sessionId, commandId), commandDeadline);
   if (typeof first.exitCode === "number") {
     return first.exitCode;
   }
   for (const delayMs of SESSION_EXIT_CODE_RETRY_DELAYS_MS) {
-    await sleep(delayMs);
-    const status = await observeSessionCommand(timeoutMs, () => sandbox.process.getSessionCommand(sessionId, commandId));
+    await sleepWithinCommandDeadline(commandDeadline, delayMs);
+    const status = await observeSessionCommand(timeoutMs, () => sandbox.process.getSessionCommand(sessionId, commandId), commandDeadline);
     if (typeof status.exitCode === "number") {
       return status.exitCode;
     }
@@ -2083,6 +2139,7 @@ async function executeInSession(
   // attributed to the provider boundary.
   let execStart: number | null = null;
   let confirmedExitCode: number | null = null;
+  let commandDeadline: CommandDeadline;
   const streamBuffer = createSessionStreamBuffer((stream, text) => pluginContext?.execution.log(stream, text));
 
   try {
@@ -2102,11 +2159,12 @@ async function executeInSession(
     const command = `( ${loginScript} )`;
 
     execStart = timingNow();
-    const dispatched = await sandbox.process.executeSessionCommand(
+    commandDeadline = createCommandDeadline(params.commandTimeoutMs);
+    const dispatched = await withinCommandDeadline(commandDeadline, () => sandbox.process.executeSessionCommand(
       sessionId,
       { command, runAsync: true },
       timeoutSeconds,
-    );
+    ));
     const commandId = dispatched.cmdId;
 
     // Log-stream path. A session command always tries the stream first: it
@@ -2124,12 +2182,13 @@ async function executeInSession(
       commandId,
       effectiveTimeoutMs,
       streamBuffer,
+      commandDeadline,
     );
     if (streamResult.exitCode !== null) {
       confirmedExitCode = streamResult.exitCode;
       // A log socket can close before the process emits its final bytes. Even
       // a now-visible exit code does not prove the streamed prefix is complete.
-      const logs = await observeSessionCommand(effectiveTimeoutMs, () => sandbox.process.getSessionCommandLogs(sessionId, commandId));
+      const logs = await observeSessionCommand(effectiveTimeoutMs, () => sandbox.process.getSessionCommandLogs(sessionId, commandId), commandDeadline);
       streamBuffer.resetConnectionCursors();
       streamBuffer.onStdout(logs?.stdout ?? "");
       streamBuffer.onStderr(logs?.stderr ?? "");
@@ -2155,8 +2214,8 @@ async function executeInSession(
     const observe = async <T>(action: () => Promise<T>): Promise<T> => {
       try {
         return await (streamResult.pollUntilExit
-          ? observeSessionCommand(effectiveTimeoutMs, action)
-          : beforeSessionDeadline(deadlineMs, action));
+          ? observeSessionCommand(effectiveTimeoutMs, action, commandDeadline)
+          : commandDeadline ? commandDeadline.race(action) : beforeSessionDeadline(deadlineMs, action));
       } catch (error) {
         if (error instanceof DaytonaTimeoutError) throw new SessionObservationTimeoutError();
         throw error;
@@ -2183,11 +2242,12 @@ async function executeInSession(
       // Full log snapshots are heavier than a status read. Limit fallback
       // traffic to one snapshot per second. Failed-stream fallback retains
       // its original deadline, including the time spent waiting between reads.
-      await sleep(streamResult.pollUntilExit ? SESSION_LOG_POLL_INTERVAL_MS
+      await sleepWithinCommandDeadline(commandDeadline, streamResult.pollUntilExit ? SESSION_LOG_POLL_INTERVAL_MS
         : Math.max(0, Math.min(SESSION_LOG_POLL_INTERVAL_MS, deadlineMs - Date.now())));
     }
   } catch (error) {
-    if (error instanceof SessionObservationTimeoutError) {
+    if (error instanceof SessionObservationTimeoutError ||
+      (error instanceof SessionCommandDeadlineError && confirmedExitCode !== null)) {
       // Preserve undecided decoder suffixes in the partial result, without
       // injecting a possibly incomplete character into the live protocol.
       streamBuffer.finish(false);
@@ -2195,7 +2255,7 @@ async function executeInSession(
         exitCode: null,
         timedOut: true,
         stdout: streamBuffer.stdout,
-        stderr: `${streamBuffer.stderr}Session log observation timed out after ${Math.round(effectiveTimeoutMs / 1000)} s; ${confirmedExitCode === null ? "command exit remains unconfirmed" : "final output may be incomplete"}.\n`,
+        stderr: `${streamBuffer.stderr}Session log observation timed out after ${Math.round((commandDeadline?.expired() ? params.commandTimeoutMs! : effectiveTimeoutMs) / 1000)} s; ${confirmedExitCode === null ? "command exit remains unconfirmed" : "final output may be incomplete"}.\n`,
         metadata: {
           ...(execStart != null ? { durationMs: timingNow() - execStart } : {}),
           timeoutScope: "session_log_observation",
@@ -2209,7 +2269,7 @@ async function executeInSession(
       const timeoutMessage = gitNet
         ? `Git network operation timed out after ${Math.round(effectiveTimeoutMs / 1000)} s — the remote may be unreachable or noninteractive credentials are not configured.`
         : error instanceof SessionCommandDeadlineError
-          ? `Command timed out after ${Math.round(effectiveTimeoutMs / 1000)} s.`
+          ? `Command timed out after ${Math.round((commandDeadline?.expired() ? params.commandTimeoutMs! : effectiveTimeoutMs) / 1000)} s.`
           : error.message.trim();
       const durationMs = execStart != null ? timingNow() - execStart : undefined;
       return {
@@ -2222,6 +2282,7 @@ async function executeInSession(
     }
     throw error;
   } finally {
+    commandDeadline?.clear();
     if (stdinPath) {
       await sandbox.fs.deleteFile(stdinPath).catch(() => undefined);
     }

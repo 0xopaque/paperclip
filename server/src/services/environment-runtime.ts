@@ -539,6 +539,9 @@ export interface EnvironmentDriverExecuteInput extends EnvironmentDriverLeaseInp
   env?: Record<string, string>;
   stdin?: string;
   timeoutMs?: number;
+  /** Total command execution budget for an explicitly requested session.
+   * Separate from the timeout of an individual status/log observation. */
+  commandTimeoutMs?: number;
   /**
    * Run this command outside the lease's persistent session. The run
    * orchestrator sets this on the workspace provision command, which runs before
@@ -2962,6 +2965,7 @@ function createSandboxEnvironmentDriver(
             env: input.env,
             stdin: input.stdin,
             timeoutMs: input.timeoutMs,
+            commandTimeoutMs: input.commandTimeoutMs,
             // Forward the effective session-bypass flag so a provider that opens
             // a persistent session skips it for a pre-run or context-less command
             // (the workspace provision command, the CLI install command, the
