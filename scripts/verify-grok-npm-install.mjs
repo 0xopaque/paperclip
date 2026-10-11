@@ -64,10 +64,30 @@ try {
   }
   visit('@paperclipai/server');
   visit('paperclipai');
+  // release.sh also builds the standalone public packages (the sandbox-provider
+  // plugins outside the pnpm workspace) before it stages anything, because it
+  // publishes them. Nothing staged here reaches them: `needed` is closed under
+  // `workspace:` specs, so every package staged below is a workspace package
+  // that `pnpm build` already built, and that build would only cost one
+  // network install and compile per plugin whose output no tarball reads.
+  // Canary Dry Run still runs it through release.sh. The one path that does
+  // read a standalone build is qualification-package retention at the end:
+  // it packs the Daytona plugin from its `dist`, which only this build
+  // produces, so the build runs when retention is requested and nowhere else.
+  const retainQualificationPackages = Boolean(process.env.PAPERCLIP_RUNNER_QUALIFICATION_PACKAGES_DIR);
+  if (retainQualificationPackages) {
+    const standaloneStarted = performance.now();
+    run(process.execPath, [join(repo, 'scripts/build-standalone-public-packages.mjs')], repo);
+    timing.stage_standalone_build_ms = Math.round(performance.now() - standaloneStarted);
+  }
+  // The server's `ui-dist` payload is prepared here; with the reuse flag set
+  // above, that copies the `ui/dist` that `pnpm build` produced instead of
+  // building the UI again.
+  const uiDistStarted = performance.now();
+  run('bash', [join(repo, 'scripts/prepare-server-ui-dist.sh')], repo);
+  timing.stage_ui_dist_ms = Math.round(performance.now() - uiDistStarted);
   // Match release.sh's unified versioning in temporary staging directories.
   // Source manifests remain untouched, including independently versioned SDKs.
-  run(process.execPath, [join(repo, 'scripts/build-standalone-public-packages.mjs')], repo);
-  run('bash', [join(repo, 'scripts/prepare-server-ui-dist.sh')], repo);
   // Each package's published files are staged into `source-<index>` and its
   // pack input into `package-<index>`, with <index> in dependency order so the
   // tarball list keeps matching `needed`. The packages that bundle dependencies
@@ -221,11 +241,13 @@ try {
   // without re-running it. `*_prefetch_ms` runs from a download's start to its
   // last output, and `*_wait_ms` is how long the main flow waited for a
   // prefetch that had not finished yet; zero means the overlap hid it entirely.
-  // `stage_sources_ms`, `stage_bundled_ms` and `stage_pack_ms` split the
-  // staging phase, and `stage_bundled_<package>_ms` is each concurrent install.
+  // `stage_ui_dist_ms`, `stage_sources_ms`, `stage_bundled_ms` and
+  // `stage_pack_ms` split the staging phase, and `stage_bundled_<package>_ms`
+  // is each concurrent install. `stage_standalone_build_ms` appears only when
+  // qualification-package retention made the standalone build necessary.
   const downloaded = Object.fromEntries(downloads.map(({ name, durationMs }) => [`${name}_prefetch_ms`, durationMs]));
   console.log(JSON.stringify({ schema: 'paperclip.public-npm-install.timing.v1', ...timing, ...downloaded, ...bundledInstallTimings(installs) }));
-  if (process.env.PAPERCLIP_RUNNER_QUALIFICATION_PACKAGES_DIR) {
+  if (retainQualificationPackages) {
     const retained = retainRunnerQualificationPackages({ repo, output: process.env.PAPERCLIP_RUNNER_QUALIFICATION_PACKAGES_DIR, sourceRevision, releaseVersion, env,
       publicArchives: [...needed].map((name, index) => ({ name, file: tarballs[index] })),
     });
