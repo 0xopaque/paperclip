@@ -113,17 +113,36 @@ operator reconciliation; this API does not discard it to save compute.
 
 The report checks all companies in one bounded read-only database transaction.
 Queued and orphaned runs, timers, retries, accounting debt, unfinished issues,
-cleanup, active routines, integrations, external API credentials, and plugin
+cleanup, active routines, integrations, external ingress credentials, and plugin
 work block sleep. Completed ordinary run history does not. Less common work
 sources conservatively block on any retained records. Active issue watchdogs
 block sleep even when their watched issue is complete and no review has started.
 Missing migrations, malformed configuration and database errors produce unknown
 without exposing SQL or tenant data.
 
+Active `runtime_auth` connections with purpose `ai` are saved credentials, not
+independent workers. Their saved configuration does not block sleep. Login
+sessions and runs still pass the existing durable checks. Detached subscription
+observations and quota reads remain counted through their actual completion,
+including token refresh after a quota response times out. Credential-recovery
+journals, partial writes and probes block sleep across restart. Empty company
+directories left after successful recovery do not; invalid paths and read
+failures remain unknown. Credentials and connection records are retained.
+MCP, chat and other connections still block until they have a wake contract.
+
+A failed ephemeral lease is history only with successful cleanup, a release
+timestamp, and an exact provider termination receipt bound to its company, run,
+lease and resource. Its run must be finished without retry or accounting debt.
+Pending cleanup claims and export/stop-and-retain intents still block. Failure
+labels or cleanup success without that proof do not authorize sleep. Lease
+history is retained; this check performs no provider teardown or data updates.
+
 Finished login-session history permits sleep only after its promotion claim is
-cleared and any retained provider reference has a matching released or expired
-lease with successful cleanup and a release timestamp in the same company and
-environment. Missing cleanup evidence, `cleanup_pending`, and live login flows
+cleared and any retained provider reference has a matching released, expired,
+or verified failed ephemeral lease with successful cleanup and a release
+timestamp in the same company and environment. The failed lease must satisfy
+the same termination and run checks above. Missing cleanup evidence,
+`cleanup_pending`, and live login flows
 remain blockers. A finished coalesced wake is history only when its exact
 company/agent's linked run has finished without retry or accounting debt.
 Image-setup history still blocks: promotion can succeed before teardown is
