@@ -6,7 +6,7 @@ import {
   agentInstructionWorkingCopies, agents, agentApiKeys, agentWakeupRequests, companies, companySecretProposals, createDb,
   adapterAuthSessions, environments, environmentLeases, executionWorkspaces,
   heartbeatRuns, issues, issueWatchdogs, issueThreadInteractions, issueQuestionResponseDeliveries,
-  projects, routines, toolApplications, toolConnections, type Db,
+  projects, projectWorkspaces, routines, toolApplications, toolConnections, workspaceOperations, executionWorkspaceRuntimeLeases, type Db,
 } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { readIdleSleepSafety, type IdleSleepDrainStatus } from "../services/idle-sleep-safety.js";
@@ -184,6 +184,37 @@ if (!support.supported) console.warn(`Skipping idle sleep Postgres tests: ${supp
     await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, invocationSource: "on_demand", status: "succeeded" });
     return { companyId, agentId, runId };
   }
+
+  it.each(["succeeded", "failed", "cancelled", "timed_out", "interrupted"])(
+    "permits a finished %s run with a consumed retry date without changing history", async status => {
+      const { runId } = await seed();
+      const scheduledRetryAt = new Date(now - 1000);
+      await db.update(heartbeatRuns).set({ status, finishedAt: new Date(now), scheduledRetryAt }).where(eq(heartbeatRuns.id, runId));
+      expect(await read()).toEqual(none);
+      expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)))
+        .toMatchObject([{ status, scheduledRetryAt }]);
+    },
+  );
+
+  it.each([
+    { status: "scheduled_retry", finishedAt: new Date(now) },
+    { status: "queued", finishedAt: new Date(now) },
+    { status: "running", finishedAt: new Date(now) },
+    { status: "failed", finishedAt: null },
+    { status: "failed", finishedAt: new Date(now), costAccountingPending: true },
+    { status: "failed", finishedAt: new Date(now - 2000) },
+  ])("retains retry work without terminal consumption proof: %j", async change => {
+    const { runId } = await seed();
+    await db.update(heartbeatRuns).set({ scheduledRetryAt: new Date(now - 1000), ...change }).where(eq(heartbeatRuns.id, runId));
+    expect(await read()).toEqual(present);
+  });
+
+  it("keeps a live retry child awake after its parent's schedule is consumed", async () => {
+    const { companyId, agentId, runId } = await seed();
+    await db.update(heartbeatRuns).set({ finishedAt: new Date(now), scheduledRetryAt: new Date(now - 1000) }).where(eq(heartbeatRuns.id, runId));
+    await db.insert(heartbeatRuns).values({ companyId, agentId, invocationSource: "on_demand", status: "scheduled_retry", retryOfRunId: runId, scheduledRetryAt: new Date(now + 1000) });
+    expect(await read()).toEqual(present);
+  });
 
   async function seedQuestionDelivery(change: Partial<typeof issueQuestionResponseDeliveries.$inferInsert> = {}) {
     const seeded = await seed();
@@ -521,6 +552,14 @@ if (!support.supported) console.warn(`Skipping idle sleep Postgres tests: ${supp
       .toMatchObject([{ status: "failed", cleanupStatus: "success" }]);
   });
 
+  it("permits consumed retry history only with exact failed-lease termination proof", async () => {
+    const { lease, runId } = await seedFinishedFailedLease();
+    await db.update(heartbeatRuns).set({ scheduledRetryAt: new Date(now - 1000) }).where(eq(heartbeatRuns.id, runId));
+    expect(await read()).toEqual(none);
+    await db.update(environmentLeases).set({ metadata: {} }).where(eq(environmentLeases.id, lease.id));
+    expect(await read()).toEqual(present);
+  });
+
   it.each([
     "cleanup_failed", "cleanup_unknown", "unreleased", "retained_policy", "reusable_policy",
     "active", "pending_cleanup", "missing_receipt", "wrong_company", "wrong_run", "wrong_lease",
@@ -670,12 +709,92 @@ if (!support.supported) console.warn(`Skipping idle sleep Postgres tests: ${supp
     expect(await read()).toEqual(present);
   });
 
-  it("reports retained execution workspaces that may need delayed cleanup", async () => {
+  async function seedRetainedWorkspace(change: Partial<typeof executionWorkspaces.$inferInsert> = {}) {
     const { companyId } = await seed();
     const [project] = await db.insert(projects).values({ companyId, name: "Fixture project" }).returning();
-    await db.insert(executionWorkspaces).values({
-      companyId, projectId: project!.id, name: "Fixture workspace", mode: "isolated",
-      strategyType: "git_worktree", status: "closed", cleanupEligibleAt: new Date(now + 86_400_000),
+    const [workspace] = await db.insert(executionWorkspaces).values({
+      companyId, projectId: project!.id, name: "Fixture workspace", mode: "isolated_workspace",
+      strategyType: "git_worktree", status: "active", providerType: "git_worktree",
+      cwd: "/tmp/fixture-retained-worktree", providerRef: "/tmp/fixture-retained-worktree",
+      ...change,
+    }).returning();
+    return workspace!;
+  }
+
+  it.each(["local_fs", "git_worktree"].flatMap(providerType =>
+    ["active", "idle", "in_review", "archived"].map(status => ({ providerType, status }))))(
+    "permits a passive local directory without removing retained data: %j", async ({ providerType, status }) => {
+      const metadata = { config: {
+        environmentId: randomUUID(), provisionCommand: null, runtimeProvisionCommand: null,
+        teardownCommand: null, cleanupCommand: null, workspaceRuntime: null,
+        desiredState: null, serviceStates: null,
+      }, retainedFixture: true };
+      const strategyType = providerType === "local_fs" ? "project_primary" : "git_worktree";
+      const workspace = await seedRetainedWorkspace({ providerType, strategyType, status, metadata, cleanupEligibleAt: new Date(Date.UTC(2099, 0, 1)) });
+      expect(await read()).toEqual(none);
+      expect(await db.select().from(executionWorkspaces).where(eq(executionWorkspaces.id, workspace.id)))
+        .toMatchObject([{ status, metadata, cwd: workspace.cwd, cleanupEligibleAt: workspace.cleanupEligibleAt }]);
+    },
+  );
+
+  it.each([null, {}, { config: null }, { config: {} }, { config: { desiredState: "stopped", serviceStates: {} } }])(
+    "permits passive local configuration: %j", async metadata => {
+      await seedRetainedWorkspace({ metadata });
+      expect(await read()).toEqual(none);
+    },
+  );
+
+  it.each([
+    { providerType: "cloud_sandbox" }, { providerType: "future_provider" },
+    { strategyType: "adapter_managed" }, { strategyType: "future_strategy" },
+    { mode: "future_mode" },
+    { providerRef: "another-resource" }, { status: "cleanup_failed" }, { status: "future_state" },
+    { cleanupEligibleAt: new Date(now) }, { metadata: { reopenPendingConsumption: true } },
+    { metadata: { reopenPendingConsumption: "unknown" } },
+    { metadata: { config: [] } }, { metadata: { config: "malformed" } },
+    { metadata: { config: { workspaceRuntime: {} } } },
+    { metadata: { config: { workspaceRuntime: { services: [] } } } },
+    { metadata: { config: { desiredState: "running" } } },
+    { metadata: { config: { desiredState: "manual" } } },
+    { metadata: { config: { serviceStates: { web: "stopped" } } } },
+    { metadata: { config: { provisionCommand: "echo fixture" } } },
+    { metadata: { config: { runtimeProvisionCommand: "echo fixture" } } },
+    { metadata: { config: { teardownCommand: "echo fixture" } } },
+    { metadata: { config: { cleanupCommand: "echo fixture" } } },
+    { metadata: { config: { futureWorker: true } } },
+  ])("retains a directory with work or unfamiliar state: %j", async change => {
+    await seedRetainedWorkspace(change);
+    expect(await read()).toEqual(present);
+  });
+
+  it("fails closed for malformed directory metadata", async () => {
+    const workspace = await seedRetainedWorkspace();
+    await db.execute(sql`UPDATE execution_workspaces SET metadata = '[]'::jsonb WHERE id = ${workspace.id}`);
+    expect(await read()).toEqual(present);
+  });
+
+  it("retains a shared directory that can inherit project runtime configuration", async () => {
+    const workspace = await seedRetainedWorkspace();
+    const [projectWorkspace] = await db.insert(projectWorkspaces).values({
+      companyId: workspace.companyId, projectId: workspace.projectId, name: "Shared fixture",
+      metadata: { runtimeConfig: { workspaceRuntime: { services: [] } } },
+    }).returning();
+    await db.update(executionWorkspaces).set({ mode: "shared_workspace", projectWorkspaceId: projectWorkspace!.id })
+      .where(eq(executionWorkspaces.id, workspace.id));
+    expect(await read()).toEqual(present);
+  });
+
+  it("retains a local directory with an unfinished operation", async () => {
+    const workspace = await seedRetainedWorkspace();
+    await db.insert(workspaceOperations).values({ companyId: workspace.companyId, executionWorkspaceId: workspace.id, phase: "cleanup", status: "running" });
+    expect(await read()).toEqual(present);
+  });
+
+  it("retains a local directory with a runtime owner", async () => {
+    const workspace = await seedRetainedWorkspace();
+    await db.insert(executionWorkspaceRuntimeLeases).values({
+      companyId: workspace.companyId, executionWorkspaceId: workspace.id,
+      ownerKey: "fixture-owner", lastAction: "use", expiresAt: new Date(Date.UTC(2099, 0, 1)),
     });
     expect(await read()).toEqual(present);
   });

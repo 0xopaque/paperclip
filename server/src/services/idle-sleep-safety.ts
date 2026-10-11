@@ -22,6 +22,16 @@ export type InspectIdlePlugins = (hold: { ownerId: string; expiresAt: number }) 
   pluginIds: string[];
 }>;
 
+// Retry promotion keeps its due date as history on the run. Only a terminal
+// run finished at or after that date has consumed the schedule. Newer retry
+// dates, unfinished runs and accounting work still require the instance.
+function finishedRun(alias: string): string {
+  return `${alias}.status IN ('succeeded', 'failed', 'cancelled', 'timed_out', 'interrupted')
+    AND ${alias}.finished_at IS NOT NULL
+    AND (${alias}.scheduled_retry_at IS NULL OR ${alias}.scheduled_retry_at <= ${alias}.finished_at)
+    AND ${alias}.cost_accounting_pending = false`;
+}
+
 // A failed turn may have successfully torn down its ephemeral allocation. A
 // cleanup label alone is not provider termination proof. Require the exact
 // host-owned receipt and finished run, and retain all cleanup/export intents.
@@ -43,9 +53,7 @@ function finishedFailedLease(alias: string): string {
     AND ${receipt}->>'state' IN ('stopped', 'destroyed')
     AND EXISTS (SELECT 1 FROM heartbeat_runs r WHERE r.id = ${alias}.heartbeat_run_id
       AND r.company_id = ${alias}.company_id
-      AND r.status IN ('succeeded', 'failed', 'cancelled', 'timed_out', 'interrupted')
-      AND r.finished_at IS NOT NULL AND r.scheduled_retry_at IS NULL
-      AND r.cost_accounting_pending = false)`;
+      AND ${finishedRun("r")})`;
 }
 
 // These are deliberately conservative. Completed agent runs and workspace
@@ -60,7 +68,9 @@ const WORK_CHECKS = [
      COALESCE((runtime_config->'heartbeat'->>'intervalSec')::numeric, 0) > 0)`,
   `SELECT 1 FROM heartbeat_runs WHERE
     status NOT IN ('succeeded', 'failed', 'cancelled', 'timed_out', 'interrupted')
-    OR scheduled_retry_at IS NOT NULL OR cost_accounting_pending`,
+    OR (scheduled_retry_at IS NOT NULL
+      AND (finished_at IS NULL OR scheduled_retry_at > finished_at))
+    OR cost_accounting_pending`,
   `SELECT 1 FROM agent_instruction_working_copies WHERE
     state NOT IN ('saved', 'unchanged', 'resolved', 'unavailable', 'conflict')
     OR process_stopped_at IS NULL OR next_attempt_at IS NOT NULL
@@ -78,14 +88,41 @@ const WORK_CHECKS = [
     OR (w.status = 'coalesced' AND (w.finished_at IS NULL OR NOT EXISTS (
       SELECT 1 FROM heartbeat_runs r WHERE r.id = w.run_id
         AND r.company_id = w.company_id AND r.agent_id = w.agent_id
-        AND r.status IN ('succeeded', 'failed', 'cancelled', 'timed_out', 'interrupted')
-        AND r.finished_at IS NOT NULL AND r.scheduled_retry_at IS NULL
-        AND r.cost_accounting_pending = false)))`,
+        AND ${finishedRun("r")})))`,
   `SELECT 1 FROM issues WHERE status NOT IN ('done', 'cancelled')`,
   // A completed issue can still need its first watchdog review, including a
   // retry after immediate evaluation failed before creating a review/run.
   `SELECT 1 FROM issue_watchdogs WHERE status <> 'disabled'`,
   `SELECT 1 FROM workspace_operations WHERE status NOT IN ('succeeded', 'failed', 'cancelled')`,
+  // A local directory has no independent worker. Keep unfamiliar providers,
+  // runtime/command configuration, reopen fences and due cleanup awake. Runs,
+  // operations, runtime services, retained leases and backup work are checked
+  // separately; inspecting the row never deletes or shortens retained data.
+  `SELECT 1 FROM execution_workspaces w WHERE (
+    w.provider_type IN ('local_fs', 'git_worktree')
+    AND w.strategy_type IN ('project_primary', 'git_worktree')
+    AND w.mode IN ('inherit', 'shared_workspace', 'isolated_workspace', 'operator_branch', 'reuse_existing', 'agent_default')
+    AND w.status IN ('active', 'idle', 'in_review', 'archived')
+    AND (w.metadata IS NULL OR jsonb_typeof(w.metadata) = 'object')
+    -- A shared workspace can inherit runtime configuration from its project.
+    AND (w.mode <> 'shared_workspace' OR w.project_workspace_id IS NULL)
+    AND (w.provider_ref IS NULL OR w.provider_ref = w.cwd)
+    AND (w.cleanup_eligible_at IS NULL OR w.cleanup_eligible_at > now())
+    AND COALESCE(w.metadata->>'reopenPendingConsumption', 'false') = 'false'
+    AND (w.metadata->'config' IS NULL OR w.metadata->'config' = 'null'::jsonb
+      OR (jsonb_typeof(w.metadata->'config') = 'object'
+        AND CASE WHEN jsonb_typeof(w.metadata->'config') = 'object' THEN
+          (w.metadata->'config') - ARRAY['environmentId', 'provisionCommand', 'runtimeProvisionCommand',
+            'teardownCommand', 'cleanupCommand', 'workspaceRuntime', 'desiredState', 'serviceStates'] = '{}'::jsonb
+          ELSE false END
+        AND COALESCE(w.metadata->'config'->'workspaceRuntime', 'null'::jsonb) = 'null'::jsonb
+        AND COALESCE(w.metadata->'config'->'serviceStates', 'null'::jsonb) IN ('null'::jsonb, '{}'::jsonb)
+        AND COALESCE(w.metadata->'config'->>'desiredState', 'stopped') = 'stopped'
+        AND COALESCE(w.metadata->'config'->>'provisionCommand', '') = ''
+        AND COALESCE(w.metadata->'config'->>'runtimeProvisionCommand', '') = ''
+        AND COALESCE(w.metadata->'config'->>'teardownCommand', '') = ''
+        AND COALESCE(w.metadata->'config'->>'cleanupCommand', '') = ''))
+    ) IS NOT TRUE`,
   `SELECT 1 FROM environment_leases l WHERE status NOT IN ('released', 'expired')
     AND (${finishedFailedLease("l")}) IS NOT TRUE`,
   `SELECT 1 FROM routines WHERE status NOT IN ('paused', 'archived')`,
@@ -135,9 +172,7 @@ const WORK_CHECKS = [
     OR (d.target_run_id IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM heartbeat_runs r WHERE r.id = d.target_run_id
         AND r.company_id = d.company_id
-        AND r.status IN ('succeeded', 'failed', 'cancelled', 'timed_out', 'interrupted')
-        AND r.finished_at IS NOT NULL AND r.scheduled_retry_at IS NULL
-        AND r.cost_accounting_pending = false))
+        AND ${finishedRun("r")}))
     OR (d.status = 'fallback_queued' AND d.target_run_id IS NULL AND NOT EXISTS (
       SELECT 1 FROM agent_wakeup_requests w WHERE w.company_id = d.company_id
         AND w.idempotency_key = 'question-response:' || d.interaction_id::text
@@ -147,9 +182,7 @@ const WORK_CHECKS = [
           OR (w.status = 'coalesced' AND EXISTS (
             SELECT 1 FROM heartbeat_runs r WHERE r.id = w.run_id
               AND r.company_id = w.company_id AND r.agent_id = w.agent_id
-              AND r.status IN ('succeeded', 'failed', 'cancelled', 'timed_out', 'interrupted')
-              AND r.finished_at IS NOT NULL AND r.scheduled_retry_at IS NULL
-              AND r.cost_accounting_pending = false)))))`,
+              AND ${finishedRun("r")})))))`,
   // These less common work sources fail closed on any retained state. Their
   // terminal-state exceptions can be added with tests for the owning service.
   ...[
@@ -161,7 +194,7 @@ const WORK_CHECKS = [
     "native_run_finalizations", "company_transfer_runs", "decisions", "decision_effect_executions",
     "decision_archive_notification_outbox", "browser_use_sessions", "browser_use_runs",
     "browser_use_browsers", "environment_custom_image_setup_sessions", "feedback_exports",
-    "company_secret_proposals", "execution_workspaces",
+    "company_secret_proposals",
     "mcp_oauth_grants", "mcp_mutation_receipts", "mcp_event_subscriptions",
     "mcp_event_deliveries", "mcp_attachment_uploads", "dot_agent_bindings",
     "dot_runner_assignments", "dot_runner_operations", "dot_mailbox_items",

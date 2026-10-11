@@ -35,6 +35,32 @@ signed bootstrap writes. Only the task-drain read skips request tracking.
 Its authentication finishes under a separate work token before entering the
 report, so it counts concurrent writes without blocking on its own scan.
 
+## Retry history
+
+Retry promotion keeps `scheduled_retry_at` on a run for inspection. That date
+is consumed history when the run is terminal, has a finish time at or after the
+retry date, and has no accounting work pending. The idle report uses the same
+proof for failed ephemeral leases, coalesced wakes, and acknowledged question
+responses. A live retry child still blocks through the instance-wide run check.
+Unfinished runs, retry dates after the finish time, and pending accounting stay
+awake. The inspection does not clear dates or change retry scheduling.
+
+## Retained local workspaces
+
+Local directories for primary projects and Git worktrees do not require an
+awake process by themselves. The report permits their retained rows only in
+known modes and states, with no runtime configuration, service state, commands,
+pending reopen, or cleanup already eligible. Saved environment references alone
+are passive. Shared workspaces with a project workspace remain blockers because
+they can inherit runtime configuration. Unfamiliar providers, strategies,
+configuration and malformed metadata also remain blockers.
+
+This does not delete files, alter retention, or clear workspace records. Future
+cleanup eligibility is an earliest allowed time; eligible cleanup can wait for
+the next wake. Due cleanup, unfinished operations, runtime leases and runtime
+services still keep the instance awake through their separate checks. The host
+must keep workspace storage attached across sleep and preserve its backup policy.
+
 ## Accepted work and cleanup
 
 HTTP admission is installed before body parsing, authentication, webhooks and
