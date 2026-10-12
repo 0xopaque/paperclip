@@ -1284,6 +1284,14 @@ services and primary URLs, and posts workspace-ready notices. Process registries
 and leases stay in `workspace-runtime.ts`; the executor keeps release ordering in
 its existing cleanup path. Public-path tests use real local service processes.
 
+Instruction working-copy coordination is in
+`server/src/services/heartbeat/instruction-working-copy.ts`. Its per-run controller
+prepares copies, tracks save receipts, and coordinates warm-directory handoffs.
+Live getters preserve updated copies and expose acquired reservations even if
+preparation fails. The executor keeps release and environment-cleanup ordering;
+a separate release closure defers cleanup failures without replacing run results.
+See `tests/e2e/instruction-working-copy/README.md` for isolated browser acceptance.
+
 Task assignment Markdown is rendered by `server/src/services/heartbeat/task-markdown.ts`.
 `heartbeat.ts` re-exports it for existing callers. Keep prompt
 formatting changes in the renderer and its tests, separate from run orchestration.

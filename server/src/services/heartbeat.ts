@@ -1,3 +1,4 @@
+import { createHeartbeatInstructionCopyRelease, createHeartbeatInstructionWorkingCopy } from "./heartbeat/instruction-working-copy.js";
 import { prepareHeartbeatRuntimeServiceIntents, startHeartbeatRuntimeServices, recordHeartbeatAdapterRuntimeServices } from "./heartbeat/runtime-services.js";
 import { prepareHeartbeatExecutionConfiguration } from "./heartbeat/execution-configuration.js";
 import { createHeartbeatRunOutput } from "./heartbeat/run-output.js";
@@ -216,7 +217,6 @@ import {
 import {
   prepareChatCompletionTurn,
 } from "./chat-completion-delivery.js";
-import { AgentDirectoryReuseInvalidatedError, isAgentDirectoryCopy } from "./agent-directory-working-copies.js";
 
 import {
   NativeWorkspaceFinalizationBusyError,
@@ -283,15 +283,12 @@ import {
   prepareGitHubExecutionEnvironment,
   startAdapterExecutionTargetPaperclipBridge,
 } from "@paperclipai/adapter-utils/execution-target";
-import { agentInstructionWorkingCopyService, collectStoppedInstructionCopyWithRetries, instructionWorkingCopyGuidance } from "./agent-instruction-working-copies.js";
+import { agentInstructionWorkingCopyService } from "./agent-instruction-working-copies.js";
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import {
-  createHash,
-} from "node:crypto";
 import {
   and,
   eq,
@@ -336,9 +333,6 @@ import {
 } from "./issue-queued-comment-queue.js";
 
 import {
-  claimWarmNativeInstructionCopy,
-  nativeSessionWorkspaceScope,
-  reserveWarmNativeInstructionDirectory,
   dispatchNativeSessionResumptions,
   NativeCancellationPendingRecoveryError,
   NativeControllerDetachedForRestartError,
@@ -348,7 +342,6 @@ import {
 } from "./native-runtime/index.js";
 
 import {
-  parseNativeExecutionInput,
   type NativeExecutionInput,
   type NativeSessionBackend,
 } from "../vendor/paperclip-runner/index.js";
@@ -1855,29 +1848,7 @@ export function heartbeatService(
       run = claimed;
     }
 
-    const instructionCleanupRun = run;
-    let instructionCleanupDeferred = false;
-    const releaseInstructionCopy = async () => {
-      // Cleanup is retried from the durable working-copy receipt by the
-      // recovery sweep. It must not replace the provider result (or prevent
-      // lease release), and a timeout must not be repeated in outer teardown.
-      if (instructionCleanupDeferred) return;
-      try {
-        await instructionCopies.release(instructionCleanupRun.companyId, instructionCleanupRun.id);
-      } catch (err) {
-        instructionCleanupDeferred = true;
-        logger.warn({ err, runId: instructionCleanupRun.id }, "Agent file cleanup deferred; run outcome preserved");
-        await appendRunEvent(instructionCleanupRun, {
-          eventType: "instruction_cleanup",
-          stream: "system",
-          level: "warn",
-          message: "Agent file cleanup was deferred. The run outcome and file-save receipt are unchanged.",
-          payload: { state: "deferred" },
-        }).catch((eventError) => {
-          logger.warn({ err: eventError, runId: instructionCleanupRun.id }, "Failed to record deferred agent file cleanup");
-        });
-      }
-    };
+    const releaseInstructionCopy = createHeartbeatInstructionCopyRelease(run, instructionCopies, appendRunEvent);
 
     if (
       runOptions.nativeLeaseOwner &&
@@ -1978,8 +1949,7 @@ export function heartbeatService(
       Parameters<typeof cleanupGitHubOperationLaunchers>[0] | null = null;
     let nativeSessionResumeScheduled = false;
     let nativeOwnershipHeld = false;
-    let releaseWarmInstructionPreparation: (() => Promise<void>) | null = null;
-    let nativeInstructionReservation: Awaited<ReturnType<typeof reserveWarmNativeInstructionDirectory>> = null;
+    let instructionWorkingCopy: ReturnType<typeof createHeartbeatInstructionWorkingCopy> | null = null;
     let nativeDispatchStarted = false;
     let nativeWorkspaceFinalizeScheduled = false;
     let nativeWorkspaceSync: Awaited<
@@ -2740,49 +2710,12 @@ export function heartbeatService(
           appendRunEvent,
         },
       });
-      let instructionCopy: Awaited<ReturnType<typeof instructionCopies.prepare>> = null;
-      let instructionSave: Record<string, unknown> | null = null;
-      const instructionPreparationKey = createHash("sha256").update(JSON.stringify({
-        adapterType: agent.adapterType, adapterConfig: agent.adapterConfig, runtimeConfig: agent.runtimeConfig, sessionConfigMetadata,
-        workspace: nativeSessionWorkspaceScope({
-          binding: { runId: run.id, executionWorkspaceId: persistedExecutionWorkspace?.id ?? run.id },
-          workspace: executionWorkspace,
-        }), cwd: executionWorkspace.cwd,
-      })).digest("hex");
-      const recordInstructionSave = async (saved: NonNullable<Awaited<ReturnType<typeof instructionCopies.get>>>) => {
-        const receipt = parseObject(saved.receipt);
-        const storageWarning = readNonEmptyString(receipt.storageWarning);
-        const state = saved.errorCode === "AGENT_FILES_CHECKPOINT_UNSTABLE" ? "pending_collection"
-          : saved.state === "warm_saved" ? readNonEmptyString(receipt.checkpointState) ?? "saved" : saved.state;
-        instructionSave = { state, entryFile: saved.entryFile,
-          ...(isAgentDirectoryCopy(saved) ? { contract: "agent_files", appliedCandidateHash: saved.candidateHash, checkpointStats: receipt.checkpointStats }
-            : { revisionId: parseObject(receipt.revision).id ?? null }), storageWarning, errorCode: saved.errorCode, errorMessage: saved.errorMessage };
-        await appendRunEvent(run, { eventType: "instruction_save", stream: "system",
-          level: !saved.errorCode && !storageWarning && ["saved", "unchanged", "resolved"].includes(state) ? "info" : "warn",
-          message: storageWarning ?? (state === "saved" ? "Agent files saved."
-            : state === "unchanged" ? "Instruction working copy is unchanged."
-              : saved.errorMessage ?? "Instruction edits were not saved."), payload: instructionSave });
-      };
-      const collectStoppedInstructions = async () => {
-        if (!instructionCopy) return;
-        const saved = await collectStoppedInstructionCopyWithRetries(() => instructionCopies.collectStopped({
-          companyId: agent.companyId, runId: run.id, target: executionTarget,
-        }));
-        if (!saved) return;
-        if (saved.state !== "superseded") await recordInstructionSave(saved);
-      };
-      const nativeInstructionWorkingCopy = () => instructionCopy ? {
-        ...(isAgentDirectoryCopy(instructionCopy) ? { runId: run.id, preparationKey: instructionPreparationKey } : {}),
-        root: instructionCopy.executionRoot,
-        ...(instructionCopy.receipt?.warm === true ? { checkpointWarm: async () => {
-          const saved = await instructionCopies.checkpointWarm({ companyId: agent.companyId, runId: run.id, target: executionTarget });
-          if (saved) await recordInstructionSave(saved);
-          return saved?.state === "warm_saved" && saved.errorCode === null;
-        } } : {}),
-        hasChanges: () => instructionCopies.hasChanges({ companyId: agent.companyId, runId: run.id, target: executionTarget }),
-        collectStopped: collectStoppedInstructions,
-        retirementFailed: async () => { await instructionCopies.reportRetirementUnconfirmed(agent.companyId, run.id); },
-      } : undefined;
+      const preparedInstructions = instructionWorkingCopy = createHeartbeatInstructionWorkingCopy({
+        db, instructionCopies, readRun: () => run!, agent, context,
+        session: { taskSession, taskSessionForRun, sessionConfigMetadata },
+        workspace: { executionTarget, executionWorkspace, persistedExecutionWorkspace },
+        appendRunEvent,
+      });
       if (managedAiRuntime && aiBinding) {
         try { await assertManagedAiProjectAuth({ ...resolvedConfig, cwd: executionWorkspace.cwd }, aiBinding.provider, executionTarget); }
         catch { throw new ConfigurationIncompleteFailure("Project authentication conflicts with this agent’s managed AI connection", { configurationIncomplete: { reason: "ai_connection_incompatible", actionUrl: `/agents/${agent.id}/runtime` } }); }
@@ -3287,100 +3220,7 @@ export function heartbeatService(
         const hasInstructionFilesystem = nativeRuntimeResolution.kind !== "native"
           ? adapter.supportsInstructionsBundle === true
           : !["claude_managed_agents_api", "aws_agentcore_harness_api", "openai_dot_mcp"].includes(nativeRuntimeResolution.profile.backend);
-        if (hasInstructionFilesystem) {
-          try {
-            // Missing contract fields on a restored session mean the deployed
-            // legacy format. New sessions opt into whole-directory persistence.
-            const priorFileRun = taskSession?.lastRunId
-              ? await db.select({ profile: heartbeatRuns.runnerProfileJson }).from(heartbeatRuns).where(and(
-                  eq(heartbeatRuns.id, taskSession.lastRunId), eq(heartbeatRuns.companyId, agent.companyId), eq(heartbeatRuns.agentId, agent.id))).then(rows => rows[0])
-              : null;
-            const savedFileInput = parseObject(parseObject(run.runnerProfileJson).nativeExecutionInput);
-            const priorFileInput = Object.keys(savedFileInput).length ? savedFileInput : parseObject(parseObject(priorFileRun?.profile).nativeExecutionInput);
-            const priorWorkingCopy = parseObject(parseObject(parseObject(priorFileInput.runtimeContext).instructions).workingCopy);
-            const warmFiles = nativeRuntimeResolution.kind === "native" && (nativeRuntimeResolution.profile.backend === "codex_app_server" ||
-              (nativeRuntimeResolution.profile.backend === "acpx_runtime" && parseObject(agent.adapterConfig).acpxAgent === "cursor")) &&
-              (executionTarget?.kind === "remote" && executionTarget.transport === "sandbox"
-                ? executionTarget.runnerLifecyclePolicy?.mode === "warm"
-                : parseObject(agent.adapterConfig).lifecycleMode === "warm");
-            if (warmFiles && taskSessionForRun?.lastRunId) {
-              nativeInstructionReservation = await reserveWarmNativeInstructionDirectory({ companyId: agent.companyId, agentId: agent.id,
-                previousRunId: taskSessionForRun.lastRunId, runId: run.id, target: executionTarget,
-                canReuse: () => instructionCopies.canReuseWarm(agent.companyId, agent.id, taskSessionForRun!.lastRunId!),
-              });
-            }
-            if (!warmFiles && nativeRuntimeResolution.kind === "native" && priorWorkingCopy.kind === "agent_files" && taskSession) {
-              releaseWarmInstructionPreparation = await claimWarmNativeInstructionCopy({
-                priorExecution: parseNativeExecutionInput(priorFileInput), companyId: agent.companyId, agentId: agent.id,
-                executionWorkspaceId: persistedExecutionWorkspace?.id ?? run.id, workspace: executionWorkspace,
-                environmentId: executionTarget?.environmentId ?? null, runId: run.id, preparationKey: instructionPreparationKey, forceRetirement: !taskSessionForRun,
-                adopt: async previousRunId => {
-                  instructionCopy = await instructionCopies.adopt({ companyId: agent.companyId, agentId: agent.id,
-                    runId: run.id, previousRunId, target: executionTarget, cwd: executionWorkspace.cwd, allowRetirementHandoff: true });
-                  return nativeInstructionWorkingCopy() ?? null;
-                },
-              });
-              // A collection-only handoff was retired. Re-enter normal
-              // preparation instead of composing a root already collected.
-              if (!releaseWarmInstructionPreparation) instructionCopy = null;
-            }
-            const prepareInstructions = (reuseRunId?: string) => instructionCopies.prepare({
-              companyId: agent.companyId, agentId: agent.id, runId: run.id,
-              target: executionTarget, cwd: executionWorkspace.cwd,
-              legacy: Object.keys(priorFileInput).length > 0 && priorWorkingCopy.kind !== "agent_files",
-              warm: warmFiles, reuseRunId,
-              onWarmHandoff: copy => {
-                instructionCopy = copy;
-                nativeInstructionReservation?.adopt(copy.executionRoot, collectStoppedInstructions);
-              },
-            });
-            try {
-              instructionCopy ??= await prepareInstructions(nativeInstructionReservation?.reuseRunId);
-            } catch (error) {
-              if (!(error instanceof AgentDirectoryReuseInvalidatedError)) throw error;
-              // prepare has released its canonical lock. Retirement can now
-              // collect under that same lock before a fresh restore starts.
-              await nativeInstructionReservation?.release();
-              nativeInstructionReservation = null;
-              instructionCopy = await prepareInstructions();
-            }
-          } catch (error) {
-            if ((error as { status?: number }).status !== 403) throw error;
-            // Missing write identity must not break a background run's read-only
-            // prompt. It must also never imply that ordinary file edits will save.
-            await appendRunEvent(run, { eventType: "instruction_save", stream: "system", level: "warn",
-              message: "Persistent instruction editing is unavailable. Use an authenticated user with instruction edit access and a managed instruction bundle.",
-              payload: { state: "unavailable", code: "INSTRUCTION_COPY_UNAVAILABLE" } });
-            const guidance = "No editable agent instruction working copy is registered for this turn. Use authenticated agent file tools for persistent edits; do not edit a private copy named in an earlier turn or claim its changes will persist.";
-            for (const key of ["paperclipTaskMarkdown", "paperclipTaskMarkdownCompact"]) {
-              context[key] = [readNonEmptyString(context[key]), guidance].filter(Boolean).join("\n\n");
-            }
-          }
-          if (instructionCopy) {
-            const storageWarning = readNonEmptyString(instructionCopy.receipt?.storageWarning);
-            if (storageWarning) {
-              instructionSave = { state: "prepared", contract: "agent_files", storageWarning };
-              // This is an advisory on the run, never an agent pause, execution
-              // failure, or scheduling gate. Keep it visible while work runs.
-              await db.update(heartbeatRuns).set({ resultJson: sql`coalesce(${heartbeatRuns.resultJson}, '{}'::jsonb) || ${JSON.stringify({ instructionSave })}::jsonb` }).where(eq(heartbeatRuns.id, run.id));
-              await appendRunEvent(run, { eventType: "instruction_save", stream: "system", level: "warn",
-                message: storageWarning, payload: instructionSave });
-            }
-            runtimeConfig = { ...runtimeConfig, instructionsFilePath: path.join(instructionCopy.localRoot, instructionCopy.entryFile) };
-            if (isAgentDirectoryCopy(instructionCopy)) {
-              const workspace = parseObject(context.paperclipWorkspace);
-              context.paperclipWorkspace = { ...workspace, agentHome: instructionCopy.executionRoot,
-                // Keep the pre-existing permission root stable for ACP session
-                // identity. The per-run copy is already under the company root.
-                agentHomeForPermissions: workspace.agentHome,
-              };
-            }
-            const guidance = instructionWorkingCopyGuidance(instructionCopy);
-            for (const key of ["paperclipTaskMarkdown", "paperclipTaskMarkdownCompact"]) {
-              context[key] = [readNonEmptyString(context[key]), guidance].filter(Boolean).join("\n\n");
-            }
-          }
-        }
+        runtimeConfig = await preparedInstructions.prepare({ runtimeConfig, nativeRuntimeResolution, hasInstructionFilesystem });
         const runtimeSelection = await selectHeartbeatRuntime(db, {
           run,
           agent,
@@ -3416,7 +3256,7 @@ export function heartbeatService(
             runtimeConfig,
             runtimeSkillEntries,
             runScopedMentionedSkillKeys,
-            instructionCopy,
+            instructionCopy: preparedInstructions.instructionCopy,
             agentIdentity,
             issueAssigneeOverrides,
             resolvedConfig,
@@ -3490,12 +3330,12 @@ export function heartbeatService(
             goalCheckpointSession,
           },
           instructions: {
-            nativeInstructionWorkingCopy,
-            collectStoppedInstructions,
-            nativeInstructionReservation,
+            nativeInstructionWorkingCopy: preparedInstructions.nativeInstructionWorkingCopy,
+            collectStoppedInstructions: preparedInstructions.collectStoppedInstructions,
+            nativeInstructionReservation: preparedInstructions.nativeInstructionReservation,
             releaseInstructionCopy,
-            get instructionCopy() { return instructionCopy; },
-            getInstructionSave: () => instructionSave,
+            get instructionCopy() { return preparedInstructions.instructionCopy; },
+            getInstructionSave: preparedInstructions.getInstructionSave,
           },
           trace: {
             providerTraceCapture,
@@ -3764,7 +3604,7 @@ export function heartbeatService(
         });
       }
     } finally {
-      await nativeInstructionReservation?.release().catch(error => logger.warn({ runId: run.id, err: error }, "Managed warm session preparation cleanup failed"));
+      await instructionWorkingCopy?.nativeInstructionReservation?.release().catch(error => logger.warn({ runId: run.id, err: error }, "Managed warm session preparation cleanup failed"));
       if (managedAiRuntime) await managedAiRuntime.cleanup().catch(() => logger.warn({ runId: run.id }, "AI connection refresh or cleanup failed"));
       let latestRun = await getRun(run.id).catch(() => null);
       try {
@@ -3852,7 +3692,7 @@ export function heartbeatService(
           }
           // A retained or unverified process stays above this release boundary.
           // If no stopped-copy capture occurred, preserve an explicit loss report.
-          await releaseWarmInstructionPreparation?.();
+          await instructionWorkingCopy?.releaseWarmInstructionPreparation?.();
           const uncapturedInstructions = await instructionCopies.reportUnavailable(run.companyId, run.id);
           if (uncapturedInstructions?.state === "unavailable") {
             await appendRunEvent(run, { eventType: "instruction_save", stream: "system", level: "warn",
