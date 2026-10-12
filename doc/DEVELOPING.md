@@ -1278,6 +1278,12 @@ When a workspace service runs Paperclip for browser OAuth QA, configure its `exp
 
 Keep relevant heartbeat extractions and their focused tests in `server/src/services/heartbeat/`.
 
+Runtime-service coordination is in `server/src/services/heartbeat/runtime-services.ts`.
+It validates service intents, starts configured services, records adapter-managed
+services and primary URLs, and posts workspace-ready notices. Process registries
+and leases stay in `workspace-runtime.ts`; the executor keeps release ordering in
+its existing cleanup path. Public-path tests use real local service processes.
+
 Task assignment Markdown is rendered by `server/src/services/heartbeat/task-markdown.ts`.
 `heartbeat.ts` re-exports it for existing callers. Keep prompt
 formatting changes in the renderer and its tests, separate from run orchestration.

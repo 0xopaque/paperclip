@@ -1,3 +1,4 @@
+import { prepareHeartbeatRuntimeServiceIntents, startHeartbeatRuntimeServices, recordHeartbeatAdapterRuntimeServices } from "./heartbeat/runtime-services.js";
 import { prepareHeartbeatExecutionConfiguration } from "./heartbeat/execution-configuration.js";
 import { createHeartbeatRunOutput } from "./heartbeat/run-output.js";
 import { prepareHeartbeatSession, resolveHeartbeatAdapterSession } from "./heartbeat/session-preparation.js";
@@ -400,14 +401,7 @@ import {
   type LogActivityInput,
 } from "./activity-log.js";
 import {
-  buildWorkspaceReadyComment,
-  buildWorkspaceReadyMetadata,
-  buildWorkspaceReadyPresentation,
-  ensureRuntimeServicesForRun,
-  persistAdapterManagedRuntimeServices,
   releaseRuntimeServicesForRun,
-  type RealizedExecutionWorkspace,
-  type RuntimeServiceRef,
 } from "./workspace-runtime.js";
 
 import { issueService } from "./issues.js";
@@ -508,10 +502,6 @@ import {
   clearHeartbeatRunRuntimeStatus,
   sweepExpiredHeartbeatRunRuntimeStatuses,
 } from "./heartbeat-run-runtime-status.js";
-
-import {
-  assertLowTrustRuntimeServicesAllowed,
-} from "./low-trust-runtime-containment.js";
 
 import { resolveAndRetainRunTrustPreset } from "./run-trust-preset.js";
 
@@ -796,40 +786,7 @@ export interface HeartbeatServiceOptions {
   }) => Promise<void>;
 }
 
-type WorkspaceReadyCommentWriter = {
-  addComment: (
-    issueId: string,
-    body: string,
-    actor: { agentId?: string; userId?: string; runId?: string | null },
-    options?: {
-      presentation?: ReturnType<typeof buildWorkspaceReadyPresentation>;
-      metadata?: ReturnType<typeof buildWorkspaceReadyMetadata>;
-    },
-  ) => Promise<unknown>;
-};
-
-export function postWorkspaceReadyComment(input: {
-  issuesSvc: WorkspaceReadyCommentWriter;
-  issueId: string;
-  agentId: string;
-  runId: string;
-  workspace: RealizedExecutionWorkspace;
-  runtimeServices: RuntimeServiceRef[];
-}) {
-  const workspaceReadyInput = {
-    workspace: input.workspace,
-    runtimeServices: input.runtimeServices,
-  };
-  return input.issuesSvc.addComment(
-    input.issueId,
-    buildWorkspaceReadyComment(workspaceReadyInput),
-    { agentId: input.agentId, runId: input.runId },
-    {
-      presentation: buildWorkspaceReadyPresentation(workspaceReadyInput),
-      metadata: buildWorkspaceReadyMetadata(workspaceReadyInput),
-    },
-  );
-}
+export { postWorkspaceReadyComment } from "./heartbeat/runtime-services.js";
 
 export { postNativeModelFallbackWarning } from "./heartbeat/runtime-selection.js";
 
@@ -3137,26 +3094,7 @@ export function heartbeatService(
           executionWorkspace: { branchName: executionWorkspace.branchName },
         };
       }
-      const runtimeServiceIntents = (() => {
-        const runtimeConfig = parseObject(
-          hostExecutionWorkspaceConfig.workspaceRuntime,
-        );
-        return Array.isArray(runtimeConfig.services)
-          ? runtimeConfig.services.filter(
-              (value): value is Record<string, unknown> =>
-                typeof value === "object" && value !== null,
-            )
-          : [];
-      })();
-      assertLowTrustRuntimeServicesAllowed({
-        resolution: trustPreset,
-        runtimeServiceCount: runtimeServiceIntents.length,
-      });
-      if (runtimeServiceIntents.length > 0) {
-        context.paperclipRuntimeServiceIntents = runtimeServiceIntents;
-      } else {
-        delete context.paperclipRuntimeServiceIntents;
-      }
+      prepareHeartbeatRuntimeServiceIntents({ hostExecutionWorkspaceConfig, context, trustPreset });
       if (
         executionWorkspace.projectId &&
         !readNonEmptyString(context.projectId)
@@ -3300,59 +3238,10 @@ export function heartbeatService(
               typeof entry[0] === "string" && typeof entry[1] === "string",
           ),
         );
-        const runtimeServices = await ensureRuntimeServicesForRun({
-          db,
-          runId: run.id,
-          agent: {
-            id: agent.id,
-            name: agent.name,
-            companyId: agent.companyId,
-          },
-          issue: issueRef,
-          workspace: executionWorkspace,
-          executionWorkspaceId:
-            persistedExecutionWorkspace?.id ??
-            issueRef?.executionWorkspaceId ??
-            null,
-          config: hostExecutionWorkspaceConfig,
-          adapterEnv,
-          onLog,
-          recorder: workspaceOperationRecorder,
+        const runtimeServices = await startHeartbeatRuntimeServices(db, {
+          run, agent, issueId, issueRef, executionWorkspace, context, issuesSvc, onLog,
+          persistedExecutionWorkspace, hostExecutionWorkspaceConfig, adapterEnv, workspaceOperationRecorder,
         });
-        if (runtimeServices.length > 0) {
-          context.paperclipRuntimeServices = runtimeServices;
-          context.paperclipRuntimePrimaryUrl =
-            runtimeServices.find((service) => readNonEmptyString(service.url))
-              ?.url ?? null;
-          await db
-            .update(heartbeatRuns)
-            .set({
-              contextSnapshot: context,
-              updatedAt: new Date(),
-            })
-            .where(eq(heartbeatRuns.id, run.id));
-        }
-        if (
-          issueId &&
-          (executionWorkspace.created ||
-            runtimeServices.some((service) => !service.reused))
-        ) {
-          try {
-            await postWorkspaceReadyComment({
-              issuesSvc,
-              issueId,
-              agentId: agent.id,
-              runId: run.id,
-              workspace: executionWorkspace,
-              runtimeServices,
-            });
-          } catch (err) {
-            await onLog(
-              "stderr",
-              `[paperclip] Failed to post workspace-ready comment: ${err instanceof Error ? err.message : String(err)}\n`,
-            );
-          }
-        }
         const adapter = getServerAdapter(agent.adapterType);
         const durableGoalControlRun =
           readNonEmptyString(context.goalControlRequestId) !== null ||
@@ -3689,56 +3578,10 @@ export function heartbeatService(
             "run referenced-project remote staging",
           );
         }
-        const adapterManagedRuntimeServices = adapterResult.runtimeServices
-          ? await persistAdapterManagedRuntimeServices({
-              db,
-              adapterType: agent.adapterType,
-              runId: run.id,
-              agent: {
-                id: agent.id,
-                name: agent.name,
-                companyId: agent.companyId,
-              },
-              issue: issueRef,
-              workspace: executionWorkspace,
-              reports: adapterResult.runtimeServices,
-            })
-          : [];
-        if (adapterManagedRuntimeServices.length > 0) {
-          const combinedRuntimeServices = [
-            ...runtimeServices,
-            ...adapterManagedRuntimeServices,
-          ];
-          context.paperclipRuntimeServices = combinedRuntimeServices;
-          context.paperclipRuntimePrimaryUrl =
-            combinedRuntimeServices.find((service) =>
-              readNonEmptyString(service.url),
-            )?.url ?? null;
-          await db
-            .update(heartbeatRuns)
-            .set({
-              contextSnapshot: context,
-              updatedAt: new Date(),
-            })
-            .where(eq(heartbeatRuns.id, run.id));
-          if (issueId) {
-            try {
-              await postWorkspaceReadyComment({
-                issuesSvc,
-                issueId,
-                agentId: agent.id,
-                runId: run.id,
-                workspace: executionWorkspace,
-                runtimeServices: adapterManagedRuntimeServices,
-              });
-            } catch (err) {
-              await onLog(
-                "stderr",
-                `[paperclip] Failed to post adapter-managed runtime comment: ${err instanceof Error ? err.message : String(err)}\n`,
-              );
-            }
-          }
-        }
+        await recordHeartbeatAdapterRuntimeServices(db, {
+          run, agent, issueId, issueRef, executionWorkspace, context, issuesSvc, onLog,
+          adapterResult, runtimeServices,
+        });
         await runCompletion.completeRun({
           run, agent, issueId, issueRef, signal: executionControl.controller.signal,
           output: runOutput,
