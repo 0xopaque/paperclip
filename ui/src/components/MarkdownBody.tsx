@@ -119,6 +119,8 @@ interface MarkdownBodyProps {
   externalReferences?: MarkdownExternalReferenceMap;
   /** Optional resolver for relative image paths (e.g. within export packages) */
   resolveImageSrc?: (src: string) => string | null;
+  /** Resolve file links to app routes; null leaves the label without a link. */
+  resolveLinkHref?: (href: string) => string | null;
   /** Called when a user clicks an inline image */
   onImageClick?: (src: string) => void;
   /** Keep untrusted decision media inert: image references and diagram source only. */
@@ -787,6 +789,7 @@ function MarkdownBodyImpl({
   resolveWikiLinkHref,
   externalReferences,
   resolveImageSrc,
+  resolveLinkHref,
   onImageClick,
   mediaMode = "render",
   resolveWorkspaceFileRef,
@@ -968,6 +971,14 @@ function MarkdownBodyImpl({
         );
       }
 
+      const resolvedHref = href && resolveLinkHref ? resolveLinkHref(href) : href;
+      if (resolveLinkHref && resolvedHref !== href) {
+        return resolvedHref ? (
+          <Link to={resolvedHref} style={mergeWrapStyle(linkStyle as React.CSSProperties | undefined)}>
+            {linkChildren}
+          </Link>
+        ) : <>{linkChildren}</>;
+      }
       const isGitHubLink = isGitHubUrl(href);
       const isExternal = isExternalHttpUrl(href);
       const leadingIcon = isGitHubLink ? (
@@ -1011,7 +1022,7 @@ function MarkdownBodyImpl({
       };
     }
     return map;
-  }, [theme, linkIssueReferences, linkCaseReferences, externalReferenceLookup, resolveImageSrc, onImageClick, mediaMode]);
+  }, [theme, linkIssueReferences, linkCaseReferences, externalReferenceLookup, resolveImageSrc, resolveLinkHref, onImageClick, mediaMode]);
 
   return (
     <div
