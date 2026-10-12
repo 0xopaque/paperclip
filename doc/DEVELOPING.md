@@ -1293,6 +1293,14 @@ cleanup. Public-path characterization tests are in
 browser fixture also checks the persisted prompt variants and description revision
 from a real process adapter before completing its task.
 
+Execution configuration is assembled in
+`server/src/services/heartbeat/execution-configuration.ts`: workspace and issue
+overrides, scoped credentials, managed AI identity, and runtime skill delivery.
+The executor receives credential ownership and failure-redaction updates as soon
+as they are available, so later setup failures still clean up acquired resources.
+Busy-account deferral returns explicitly before session/workspace preparation.
+Public-path tests are in `server/src/__tests__/heartbeat-execution-configuration.test.ts`.
+
 Session preparation is in `server/src/services/heartbeat/session-preparation.ts`.
 It selects fresh or resumable sessions from effective config and managed-account
 identity, then resolves adapter session identity and compaction after workspace
