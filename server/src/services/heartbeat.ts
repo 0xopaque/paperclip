@@ -1,3 +1,4 @@
+import { prepareHeartbeatSession, resolveHeartbeatAdapterSession } from "./heartbeat/session-preparation.js";
 import { prepareHeartbeatTaskContext } from "./heartbeat/task-context.js";
 import { selectHeartbeatEnvironment } from "./heartbeat/environment-selection.js";
 import { prepareHeartbeatWorkspace } from "./heartbeat/workspace-preparation.js";
@@ -80,9 +81,6 @@ import {
   normalizeResumeParamsForAdapter,
   truncateDisplayId,
   resolveLedgerScopeForRun,
-  describeSessionResetReason,
-  isCanonicalSessionIdForAdapter,
-  requiresCanonicalSessionIds,
   resolveNextSessionState,
   resolveCacheAdjustedCostUsd,
   resolveLedgerCostStatus,
@@ -139,16 +137,10 @@ export {
 import {
   buildExecutionWorkspaceConfigSnapshot,
   stripWorkspaceRuntimeFromExecutionRunConfig,
-  buildEffectiveRunSessionConfigMetadata,
-  readConfigFingerprintFromSessionParams,
-  readConfiguredModelFromAdapterConfig,
-  resolveTaskSessionConfigFreshness,
-  stripPaperclipSessionMetadataFromSessionParams,
   resolveRuntimeSessionParamsForWorkspace,
   buildRunWorkspaceHints,
   buildReferencedProjectRunObservability,
   assertGitSensitiveAdapterWorkspaceValid,
-  type EffectiveRunSessionConfigMetadata,
   createHeartbeatWorkspaceResolver,
 } from "./heartbeat/workspaces.js";
 export {
@@ -275,7 +267,7 @@ import {
 } from "./ai-connection-runtime.js";
 import { aiConnectionBindingSchema, aiRuntimeConnectionBindingSchema, type AiConnectionRouterSelection } from "@paperclipai/shared";
 import { aiConnectionRouterService, AiConnectionPoolExhausted, applyAiConnectionRouterTaskSettings } from "./ai-connection-router.js";
-import { aiConnectionSessionCompatibilityInputs, managedAiSessionIdentityCompatible } from "./ai-connection-session.js";
+import { managedAiSessionIdentityCompatible } from "./ai-connection-session.js";
 import {
   getExecutionBlocker,
 } from "./execution-blocker.js";
@@ -319,7 +311,6 @@ import {
 } from "node:crypto";
 import {
   and,
-  desc,
   eq,
   exists,
   inArray,
@@ -336,7 +327,6 @@ import {
 } from "@paperclipai/shared";
 import {
   agents,
-  agentConfigRevisions,
   agentWakeupRequests,
   chatActions,
   heartbeatRuns,
@@ -384,7 +374,6 @@ import {
   type NativeExecutionInput,
   type NativeSessionBackend,
 } from "../vendor/paperclip-runner/index.js";
-import { createNativeSessionHandoffLoader } from "./native-runtime/native-session-handoff.js";
 
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import {
@@ -2910,143 +2899,22 @@ export function heartbeatService(
         ...identityRedactor.values,
         ...collectRunFailureSecretValues(runtimeConfig.env, secretKeys),
       ];
-      const latestAgentConfigRevision = await getLatestAgentConfigRevision(
-        agent.companyId,
-        agent.id,
-      );
-      const sessionConfigMetadataInput = {
-          agentIdentityKeyId: agentIdentity?.keyId,
-          adapterType: agent.adapterType,
-          effectiveAdapterConfig: runtimeConfig,
-          managedAiHome: managedAiRuntime?.home,
-          agentRuntimeConfig: agent.runtimeConfig,
-          issueOverrides: issueAssigneeOverrides,
-          workspaceConfig: {
-            requestedMode: requestedExecutionWorkspaceMode,
-            effectiveMode: effectiveExecutionWorkspaceMode,
-            issueConfigRevisionAt:
-              issueContext?.updatedAt instanceof Date
-                ? issueContext.updatedAt.toISOString()
-                : (issueContext?.updatedAt ?? null),
-            projectConfigRevisionAt:
-              projectContext?.updatedAt instanceof Date
-                ? projectContext.updatedAt.toISOString()
-                : (projectContext?.updatedAt ?? null),
-            projectPolicy: projectExecutionWorkspacePolicy,
-            issueSettings: issueExecutionWorkspaceSettings,
-            reusableExecutionWorkspaceConfig:
-              requestedReusableExecutionWorkspaceConfig,
-            existingExecutionWorkspace: reusableExistingExecutionWorkspace
-              ? {
-                  id: reusableExistingExecutionWorkspace.id,
-                  mode: reusableExistingExecutionWorkspace.mode,
-                  strategyType: reusableExistingExecutionWorkspace.strategyType,
-                  projectWorkspaceId:
-                    reusableExistingExecutionWorkspace.projectWorkspaceId,
-                  repoUrl: reusableExistingExecutionWorkspace.repoUrl,
-                  baseRef: reusableExistingExecutionWorkspace.baseRef,
-                  branchName: reusableExistingExecutionWorkspace.branchName,
-                  config: reusableExistingExecutionWorkspace.config,
-                }
-              : null,
-          },
-          environment: {
-            selectionSource: environmentResolution.source,
-            selectedEnvironmentId,
-            selectedEnvironment: selectedEnvironmentForConfig
-              ? {
-                  id: selectedEnvironmentForConfig.id,
-                  driver: selectedEnvironmentForConfig.driver,
-                  config: selectedEnvironmentForConfig.config,
-                  configRevisionAt:
-                    selectedEnvironmentForConfig.updatedAt instanceof Date
-                      ? selectedEnvironmentForConfig.updatedAt.toISOString()
-                      : (selectedEnvironmentForConfig.updatedAt ?? null),
-                }
-              : null,
-            executionPolicy,
-          },
-          environmentEnv: selectedEnvironmentForConfig?.envVars ?? null,
-          projectEnv: projectContext?.env ?? null,
-          routineEnv: routineEnvContext.env,
-          secretManifest,
-          runtimeSkills: runtimeSkillEntries,
-          agentConfigRevision: latestAgentConfigRevision
-            ? {
-                id: latestAgentConfigRevision.id,
-                changedKeys: latestAgentConfigRevision.changedKeys,
-                configRevisionAt:
-                  latestAgentConfigRevision.createdAt.toISOString(),
-              }
-            : null,
-        };
-      const sessionConfigMetadata = await buildEffectiveRunSessionConfigMetadata(sessionConfigMetadataInput);
-      let compatibleConfigMetadata: EffectiveRunSessionConfigMetadata[] = [];
-      if (managedAiRuntime && aiBinding && taskSession &&
-        readConfigFingerprintFromSessionParams(taskSession.sessionParamsJson)?.fingerprint !== sessionConfigMetadata.fingerprint) {
-        const revisions = requestedAiBinding?.mode === "router"
-          ? await db.select().from(agentConfigRevisions).where(and(eq(agentConfigRevisions.companyId, agent.companyId), eq(agentConfigRevisions.agentId, agent.id))).orderBy(desc(agentConfigRevisions.createdAt), desc(agentConfigRevisions.id)).limit(21)
-          : [];
-        const candidates = aiConnectionSessionCompatibilityInputs({
-          effectiveAdapterConfig: runtimeConfig, agentRuntimeConfig: agent.runtimeConfig,
-          agentConfigRevision: sessionConfigMetadataInput.agentConfigRevision,
-          issueOverrides: issueAssigneeOverrides, originalIssueOverrides: originalAiIssueOverrides,
-          binding: aiBinding, router: requestedAiBinding?.mode === "router",
-          storedIdentity: taskSession.sessionParamsJson?.paperclipAiCredentialIdentity,
-          sessionIdentity: managedAiRuntime.sessionIdentity, credentialIdentity: managedAiRuntime.identity, revisions,
-        });
-        compatibleConfigMetadata = await Promise.all(candidates.map(candidate => buildEffectiveRunSessionConfigMetadata({ ...sessionConfigMetadataInput, ...candidate })));
-      }
-      const configuredModel =
-        readConfiguredModelFromAdapterConfig(runtimeConfig);
-      if (context.refreshTools === true && agent.adapterType !== "paperclip_runner") {
-        const capability = getServerAdapter(agent.adapterType).supportsToolRefreshOnResume;
-        const canRefresh = typeof capability === "function" ? capability(runtimeConfig) : capability === true;
-        if (!canRefresh) context.forceFreshSession = true;
-      }
-      const wakeSessionResetReason = describeSessionResetReason(context);
-      const sessionConfigFreshness = resolveTaskSessionConfigFreshness({
-        hasTaskSession: taskSession != null,
-        configuredModel,
-        taskSessionParams:
-          taskSession?.sessionParamsJson ?? taskSessionDecodedParams,
-        configMetadata: sessionConfigMetadata,
-        compatibleConfigMetadata,
-        wakeResetReason: wakeSessionResetReason,
-        preserveLegacySessionWithoutConfigMetadata:
-          acceptedPlanContinuationWake && !acceptedPlanWakeRoutingDecision && !agentIdentity,
+      const preparedSession = await prepareHeartbeatSession(db, {
+        run, agent,
+        task: { context, issueRef, issueContext, projectContext, wakeCommentId, acceptedPlanContinuationWake, acceptedPlanWakeRoutingDecision },
+        session: { taskSession, taskSessionDecodedParams, explicitResumeSessionParams, explicitResumeSessionDisplayId, sessionCodec },
+        config: {
+          runtimeConfig, agentIdentity, issueAssigneeOverrides, originalAiIssueOverrides,
+          managedAiRuntime, aiBinding, requestedAiBinding, secretManifest, runtimeSkillEntries, routineEnvContext,
+        },
+        workspace: {
+          requestedExecutionWorkspaceMode, effectiveExecutionWorkspaceMode, projectExecutionWorkspacePolicy,
+          issueExecutionWorkspaceSettings, executionPolicy, requestedReusableExecutionWorkspaceConfig, reusableExistingExecutionWorkspace,
+        },
+        environment: { environmentResolution, selectedEnvironmentId, selectedEnvironmentForConfig },
+        getLatestAgentConfigRevision,
       });
-      const resetTaskSession =
-        shouldResetTaskSessionForWake(context) || sessionConfigFreshness.reset;
-      const sessionResetReason =
-        sessionConfigFreshness.reasons.join("; ") || null;
-      const taskSessionForRun = resetTaskSession ? null : taskSession;
-      const getFreshSessionHandoff = issueRef ? createNativeSessionHandoffLoader({
-        db, companyId: agent.companyId, issueId: issueRef.id, agentId: agent.id, before: run.createdAt,
-        throughCommentId: readNonEmptyString(context.conversationReplayThroughCommentId) ?? (context.interactionKind ? null : wakeCommentId),
-      }) : undefined;
-      const previousSessionParams =
-        explicitResumeSessionParams ??
-        (isCanonicalSessionIdForAdapter(
-          agent.adapterType,
-          explicitResumeSessionDisplayId,
-        )
-          ? { sessionId: explicitResumeSessionDisplayId }
-          : null) ??
-        normalizeResumeParamsForAdapter(
-          agent.adapterType,
-          stripPaperclipSessionMetadataFromSessionParams(
-            sessionCodec.deserialize(
-              taskSessionForRun?.sessionParamsJson ?? null,
-            ),
-          ),
-        );
-      // Legacy plugins can consume the existing context field on a known-fresh
-      // dispatch. Built-ins also load lazily if their resume attempt fails.
-      if (agent.adapterType !== "paperclip_runner" && !previousSessionParams && getFreshSessionHandoff) {
-        const handoff = await getFreshSessionHandoff();
-        if (handoff) context.paperclipFreshSessionHandoffMarkdown = handoff;
-      }
+      const { sessionConfigMetadata, configuredModel, resetTaskSession, sessionResetReason, taskSessionForRun, getFreshSessionHandoff, previousSessionParams } = preparedSession;
       const {
         resolvedWorkspace,
         hostExecutionWorkspaceConfig,
@@ -3500,135 +3368,18 @@ export function heartbeatService(
       ) {
         context.projectId = executionWorkspace.projectId;
       }
-      const runtimeSessionFallback =
-        taskKey || resetTaskSession
-          ? null
-          : isCanonicalSessionIdForAdapter(agent.adapterType, runtime.sessionId)
-            ? runtime.sessionId
-            : null;
-      const runtimeSessionDisplayId = truncateDisplayId(
-        explicitResumeSessionDisplayId ??
-          taskSessionForRun?.sessionDisplayId ??
-          (sessionCodec.getDisplayId
-            ? sessionCodec.getDisplayId(runtimeSessionParams)
-            : null) ??
-          readNonEmptyString(runtimeSessionParams?.sessionId) ??
-          runtimeSessionFallback,
-      );
-      let previousSessionDisplayId = requiresCanonicalSessionIds(
-        agent.adapterType,
-      )
-        ? truncateDisplayId(
-            readNonEmptyString(previousSessionParams?.sessionId) ??
-              (isCanonicalSessionIdForAdapter(
-                agent.adapterType,
-                runtimeSessionDisplayId,
-              )
-                ? runtimeSessionDisplayId
-                : null) ??
-              runtimeSessionFallback,
-          )
-        : runtimeSessionDisplayId;
-      let runtimeSessionIdForAdapter =
-        readNonEmptyString(runtimeSessionParams?.sessionId) ??
-        runtimeSessionFallback;
-      let runtimeSessionParamsForAdapter = normalizeSessionParams(
-        stripPaperclipSessionMetadataFromSessionParams(runtimeSessionParams),
-      );
-
-      const sessionCompaction = await evaluateSessionCompaction({
+      const {
+        previousSessionDisplayId, runtimeSessionParamsForAdapter, taskSessionCredentialCompatible, runtimeForAdapter, configFreshnessResultMetadata, sessionCompaction,
+      } = await resolveHeartbeatAdapterSession({
         agent,
-        sessionId: previousSessionDisplayId ?? runtimeSessionIdForAdapter,
-        issueId,
-        continuationSummaryBody: continuationSummary?.body ?? null,
-      });
-      if (sessionCompaction.rotate) {
-        context.paperclipSessionHandoffMarkdown =
-          sessionCompaction.handoffMarkdown;
-        context.paperclipSessionRotationReason = sessionCompaction.reason;
-        context.paperclipPreviousSessionId =
-          previousSessionDisplayId ?? runtimeSessionIdForAdapter;
-        runtimeSessionIdForAdapter = null;
-        runtimeSessionParamsForAdapter = null;
-        previousSessionDisplayId = null;
-        if (sessionCompaction.reason) {
-          runtimeWorkspaceWarnings.push(
-            `Starting a fresh session because ${sessionCompaction.reason}.`,
-          );
-        }
-      } else {
-        delete context.paperclipSessionHandoffMarkdown;
-        delete context.paperclipSessionRotationReason;
-        delete context.paperclipPreviousSessionId;
-      }
-
-      const taskSessionCredentialCompatible = !managedAiRuntime || managedAiSessionIdentityCompatible(
-        taskSession?.sessionParamsJson?.paperclipAiCredentialIdentity,
-        managedAiRuntime.sessionIdentity,
-        managedAiRuntime.identity,
-      );
-      if (managedAiRuntime) {
-        sessionConfigMetadata.aiCredentialIdentity = managedAiRuntime.sessionIdentity;
-        if (!taskSessionCredentialCompatible) {
-          runtimeSessionIdForAdapter = null;
-          runtimeSessionParamsForAdapter = null;
-          previousSessionDisplayId = null;
-          delete executionContinuation?.resumeDelta;
-        }
-      }
-      const runtimeForAdapter = {
-        sessionId: runtimeSessionIdForAdapter,
-        sessionParams: runtimeSessionParamsForAdapter,
-        sessionDisplayId: previousSessionDisplayId,
-        taskKey,
-      };
-      // A delta is safe only when the selected provider session is exactly the
-      // task session whose last dispatch supplied the baseline history.
-      if (
-        executionContinuation?.resumeDelta &&
-        (!taskSessionForRun ||
-          !taskSession?.sessionDisplayId ||
-          runtimeForAdapter.sessionDisplayId !== taskSession.sessionDisplayId ||
-          resetTaskSession ||
-          context.forceFreshSession === true)
-      ) {
-        delete executionContinuation.resumeDelta;
-      }
-      const configFreshnessResultMetadata = {
-        version: sessionConfigMetadata.version,
-        session: {
-          fingerprintVersion: sessionConfigMetadata.version,
-          categories: sessionConfigMetadata.categories,
-          reset: resetTaskSession,
-          resetReasons: sessionConfigFreshness.reasons,
-          changedCategories: sessionConfigFreshness.changedCategories,
-          taskSessionAvailable: taskSession != null,
-          taskSessionReused: taskSessionForRun != null,
-          storedFingerprintPresent: Boolean(
-            sessionConfigFreshness.storedFingerprint,
-          ),
-          nextFingerprint: sessionConfigFreshness.nextFingerprint,
-        },
+        task: { context, taskKey, issueId, continuationSummary, executionContinuation },
+        session: { runtime, taskSession, sessionCodec, explicitResumeSessionDisplayId, runtimeSessionParams, managedAiRuntime, prepared: preparedSession },
         workspace: {
-          fingerprintVersion: latestWorkspaceConfigMetadata.version,
-          categories: latestWorkspaceConfigMetadata.categories,
-          action: workspaceConfigFreshness.action,
-          changedCategories: workspaceConfigFreshness.changedCategories,
-          reasons: workspaceConfigFreshness.reasons,
-          reuseRequested: requestedShouldReuseExisting,
-          workspaceReused: Boolean(reusedExecutionWorkspace),
-          configSnapshotRefreshed:
-            resolvedWorkspaceReusePolicy.shouldRefreshWorkspaceConfigSnapshot,
-          storedFingerprintPresent:
-            workspaceConfigFreshness.storedFingerprintPresent,
-          storedFingerprint: workspaceConfigFreshness.storedFingerprint,
-          inferredFingerprint: workspaceConfigFreshness.inferredFingerprint,
-          nextFingerprint: workspaceConfigFreshness.nextFingerprint,
-          previousWorkspaceId:
-            workspaceReuseRequest.requestedExecutionWorkspaceId,
-          activeWorkspaceId: persistedExecutionWorkspace?.id ?? null,
+          latestWorkspaceConfigMetadata, workspaceConfigFreshness, reusedExecutionWorkspace, resolvedWorkspaceReusePolicy,
+          persistedExecutionWorkspace, runtimeWorkspaceWarnings, requestedShouldReuseExisting, workspaceReuseRequest,
         },
-      };
+        evaluateSessionCompaction,
+      });
 
       let handle: RunLogHandle | null = null;
       const goalCheckpointSession: {

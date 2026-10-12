@@ -1293,6 +1293,13 @@ cleanup. Public-path characterization tests are in
 browser fixture also checks the persisted prompt variants and description revision
 from a real process adapter before completing its task.
 
+Session preparation is in `server/src/services/heartbeat/session-preparation.ts`.
+It selects fresh or resumable sessions from effective config and managed-account
+identity, then resolves adapter session identity and compaction after workspace
+preparation. Both phases keep their original ordering in `heartbeat.ts`; they
+acquire no runtime resources. Public-path characterization tests live in
+`server/src/__tests__/heartbeat-session-preparation.test.ts`.
+
 Run-log formatting is in `server/src/services/heartbeat/run-log.ts`. It bounds
 stored event payloads, redacts and shortens log chunks, and caps stdout/stderr
 excerpts. `heartbeat.ts` keeps event writes, current-user redaction, and live
