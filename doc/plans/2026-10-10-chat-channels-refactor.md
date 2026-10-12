@@ -203,3 +203,33 @@ Slack connect journey: discovery, preview, outsider access request, duplicate
 request, member confirmation, provider notice, consumed-token rejection and
 endpoint isolation. Receipt queries, access-request transaction and notice
 payload retain their statements with explicit parameter substitutions.
+
+### Slice 4: publication replacement and supersession
+
+Move 13 functions into `publication-replacement.ts`. The module selects the exact
+provider message a publication can replace and suppresses obsolete progress. It
+uses the database, endpoint lookup and retained-source authorization callback.
+Transport execution, publication claims and receipt reactions remain coordinated
+by the service. No state or registration moves in this slice.
+
+- Source: 37,295 lines / 1,436,867 bytes → 36,393 lines / 1,400,636 bytes.
+- Destination: 963 lines / 38,724 bytes.
+- Baseline: all 51 checks and 5/5 review passed on slice 3 (`581dd656c1`, #15836).
+- All 13 bodies and every remaining statement match the predecessor exactly.
+  Server typecheck, module boundaries and whitespace checks pass.
+- Existing CI fixtures cover exact outbound ownership, interleaved control
+  messages, consumed progress, interactions, committed failure replacement and
+  issue-to-run lock order. Local database capacity remains blocked.
+
+### 2026-10-12 channel-folder reassessment: slice 4
+
+Publication replacement is shared ownership logic: exact outbound links, run and
+wake scope, consumed progress messages, interaction prompts and retained-source
+authorization. Keep those queries together. The close-message provider allowlist
+is shared dispatch metadata, not four separate implementations.
+
+Move the iMessage queued/working suppression policy and explanation to
+`imessage-photon/publications.ts`. Preserve when endpoint lookup occurs and leave
+all ownership queries unchanged. Baseline: 49 public-service publication and
+Photon cases passed, including close-owned progress, interleaved Slack control,
+Telegram confirmation and FIFO replacement. The same 49 cases passed after. Server typecheck and module boundaries pass.
