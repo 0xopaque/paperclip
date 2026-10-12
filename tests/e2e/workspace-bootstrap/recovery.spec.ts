@@ -75,6 +75,12 @@ for (const persistent of [false, true]) {
       // Independently confirm the configured source was never overwritten.
       expect(sourceCopy).toBeTruthy();
       expect(completed.scheduledRetryAttempt).toBe(1);
+      const completedRun = await api(`/heartbeat-runs/${completed.id}`);
+      const completedLog = await api(`/heartbeat-runs/${completed.id}/log`);
+      expect(completedRun.stdoutExcerpt).toContain("Workspace recovery verification complete.");
+      expect(completedRun.lastOutputSeq).toBeGreaterThan(0);
+      expect(completedRun.lastOutputBytes).toBe(completedRun.logBytes);
+      expect(completedLog.content).toContain("Workspace recovery verification complete.");
       expect(await readFile(path.join(fixture.source, "README.md"), "utf8")).toBe("Existing uncommitted work\n");
     }
     await page.reload();

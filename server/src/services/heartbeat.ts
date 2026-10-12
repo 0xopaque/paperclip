@@ -1,3 +1,4 @@
+import { createHeartbeatRunOutput } from "./heartbeat/run-output.js";
 import { prepareHeartbeatSession, resolveHeartbeatAdapterSession } from "./heartbeat/session-preparation.js";
 import { prepareHeartbeatTaskContext } from "./heartbeat/task-context.js";
 import { selectHeartbeatEnvironment } from "./heartbeat/environment-selection.js";
@@ -30,8 +31,6 @@ export {
 } from "./heartbeat/run-control.js";
 import {
   isHeartbeatRunTerminalStatus,
-  isHeartbeatRunRuntimeStatusActive,
-  publishHeartbeatRunRuntimeProgress,
   decorateHeartbeatRunRuntimeStatus,
   createHeartbeatLifecycle,
 } from "./heartbeat/run-lifecycle.js";
@@ -202,11 +201,7 @@ export {
   stripPaperclipSessionMetadataFromSessionParams,
   resolveTaskSessionConfigFreshness,
 } from "./heartbeat/workspaces.js";
-import {
-  appendExcerpt,
-  boundHeartbeatRunEventPayloadForStorage,
-  compactRunLogChunk,
-} from "./heartbeat/run-log.js";
+import { boundHeartbeatRunEventPayloadForStorage } from "./heartbeat/run-log.js";
 export {
   boundHeartbeatRunEventPayloadForStorage,
   compactRunLogChunk,
@@ -375,15 +370,11 @@ import {
   type NativeSessionBackend,
 } from "../vendor/paperclip-runner/index.js";
 
-import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
+import { getRunLogStore } from "./run-log-store.js";
 import {
   providerTraceStore,
 } from "./provider-trace-store.js";
 import { getServerAdapter, runningProcesses } from "../adapters/index.js";
-import type {
-  AdapterInvocationMeta,
-  AdapterRuntimeEvent,
-} from "../adapters/index.js";
 
 import { createRuntimeToolsToken } from "../runtime-tools-token.js";
 import {
@@ -522,9 +513,6 @@ import {
   DIRECT_NON_INVOKABLE_STATUSES,
 } from "./agent-invokability.js";
 
-import {
-  redactCurrentUserText,
-} from "../log-redaction.js";
 
 import { createRunSecretRedactionRegistry } from "./run-secret-redaction.js";
 
@@ -544,7 +532,6 @@ import { environmentRunOrchestrator } from "./environment-run-orchestrator.js";
 import {
   clearHeartbeatRunRuntimeStatus,
   sweepExpiredHeartbeatRunRuntimeStatuses,
-  touchHeartbeatRunRuntimeStatus,
 } from "./heartbeat-run-runtime-status.js";
 
 import {
@@ -556,8 +543,6 @@ import { resolveAndRetainRunTrustPreset } from "./run-trust-preset.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 
 import { computeTaskDrain, applyTaskDrain, startTaskDrain, stopTaskDrain, readTaskDrain } from "./task-admission.js";
-
-const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 
 const ACCEPTED_PLAN_CONVERSION_SKILL_KEY =
   "paperclipai/paperclip/paperclip-converting-plans-to-tasks";
@@ -574,8 +559,7 @@ export {
   ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS,
   ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
 } from "./recovery/service.js";
-export const ACTIVE_RUN_OUTPUT_PROGRESS_FLUSH_INTERVAL_MS = 60 * 1000;
-export const ACTIVE_RUN_LOG_RUNTIME_STATUS_REFRESH_INTERVAL_MS = 5 * 1000;
+export { ACTIVE_RUN_OUTPUT_PROGRESS_FLUSH_INTERVAL_MS, ACTIVE_RUN_LOG_RUNTIME_STATUS_REFRESH_INTERVAL_MS } from "./heartbeat/run-output.js";
 
 export {
   INTERACTION_CONTINUATION_INFRA_RETRY_REASON,
@@ -3381,49 +3365,16 @@ export function heartbeatService(
         evaluateSessionCompaction,
       });
 
-      let handle: RunLogHandle | null = null;
+      const runOutput = createHeartbeatRunOutput(db, {
+        run, runId, issueId, runLogStore, identityRedactor, secretKeys,
+        appendRunEvent, getCurrentUserRedactionOptions,
+      });
       const goalCheckpointSession: {
         current: {
           params: Record<string, unknown>;
           displayId: string;
         } | null;
       } = { current: null };
-      let stdoutExcerpt = "";
-      let stderrExcerpt = "";
-      let outputSeq = Number(run.lastOutputSeq ?? 0);
-      let lastOutputFlushAt: Date | null = run.lastOutputAt ?? null;
-      let lastLogRuntimeStatusTouchMs = 0;
-      const outputProgressState: {
-        pending: {
-          at: Date;
-          seq: number;
-          stream: "stdout" | "stderr";
-          bytes: number;
-        } | null;
-      } = { pending: null };
-      let persistedLogBytes = Number(run.logBytes ?? 0);
-      const flushOutputProgress = async (opts?: { force?: boolean }) => {
-        const pendingOutputProgress = outputProgressState.pending;
-        if (!pendingOutputProgress) return;
-        const shouldFlush =
-          opts?.force === true ||
-          !lastOutputFlushAt ||
-          pendingOutputProgress.at.getTime() - lastOutputFlushAt.getTime() >=
-            ACTIVE_RUN_OUTPUT_PROGRESS_FLUSH_INTERVAL_MS;
-        if (!shouldFlush) return;
-        await db
-          .update(heartbeatRuns)
-          .set({
-            lastOutputAt: pendingOutputProgress.at,
-            lastOutputSeq: pendingOutputProgress.seq,
-            lastOutputStream: pendingOutputProgress.stream,
-            lastOutputBytes: pendingOutputProgress.bytes,
-            updatedAt: new Date(),
-          })
-          .where(eq(heartbeatRuns.id, run.id));
-        lastOutputFlushAt = pendingOutputProgress.at;
-        outputProgressState.pending = null;
-      };
       try {
         const startedAt = run.startedAt ?? new Date();
         const runningWithSession = await db
@@ -3502,100 +3453,8 @@ export function heartbeatService(
           message: "run started",
         });
 
-        handle = await runLogStore.begin({
-          companyId: run.companyId,
-          agentId: run.agentId,
-          runId,
-        });
-
-        await db
-          .update(heartbeatRuns)
-          .set({
-            logStore: handle.store,
-            logRef: handle.logRef,
-            updatedAt: new Date(),
-          })
-          .where(eq(heartbeatRuns.id, runId));
-
-        const currentUserRedactionOptions =
-          await getCurrentUserRedactionOptions();
-        const appendIdentityRedactedLog = async (stream: "stdout" | "stderr", chunk: string) => {
-          const sanitizedChunk = compactRunLogChunk(
-            redactCurrentUserText(chunk, currentUserRedactionOptions),
-          );
-          if (stream === "stdout")
-            stdoutExcerpt = appendExcerpt(stdoutExcerpt, sanitizedChunk);
-          if (stream === "stderr")
-            stderrExcerpt = appendExcerpt(stderrExcerpt, sanitizedChunk);
-          const ts = new Date().toISOString();
-
-          outputSeq += 1;
-          const chunkSeq = outputSeq;
-          let appendedBytes = 0;
-          if (handle) {
-            appendedBytes = await runLogStore.append(handle, {
-              stream,
-              chunk: sanitizedChunk,
-              ts,
-              seq: chunkSeq,
-            });
-            persistedLogBytes += appendedBytes;
-          }
-          outputProgressState.pending = {
-            at: new Date(ts),
-            seq: chunkSeq,
-            stream,
-            bytes: persistedLogBytes,
-          };
-          await flushOutputProgress();
-
-          // Streamed CLI output is real run activity: keep the in-memory
-          // runtime status ("Working... / X ago") fresh between structured
-          // events so sandbox runs with mid-run log streaming never show a
-          // minutes-stale timestamp. Throttled to avoid churning the live
-          // event stream on every 250ms tail chunk.
-          const logActivityAt = new Date(ts);
-          if (
-            isHeartbeatRunRuntimeStatusActive(run.status) &&
-            logActivityAt.getTime() - lastLogRuntimeStatusTouchMs >=
-              ACTIVE_RUN_LOG_RUNTIME_STATUS_REFRESH_INTERVAL_MS
-          ) {
-            lastLogRuntimeStatusTouchMs = logActivityAt.getTime();
-            const touchedStatus = touchHeartbeatRunRuntimeStatus({
-              companyId: run.companyId,
-              issueId,
-              agentId: run.agentId,
-              runId: run.id,
-              at: logActivityAt,
-            });
-            if (touchedStatus)
-              publishHeartbeatRunRuntimeProgress(touchedStatus);
-          }
-
-          const payloadChunk =
-            sanitizedChunk.length > MAX_LIVE_LOG_CHUNK_BYTES
-              ? sanitizedChunk.slice(
-                  sanitizedChunk.length - MAX_LIVE_LOG_CHUNK_BYTES,
-                )
-              : sanitizedChunk;
-
-          publishLiveEvent({
-            companyId: run.companyId,
-            type: "heartbeat.run.log",
-            payload: {
-              runId: run.id,
-              agentId: run.agentId,
-              issueId,
-              ts,
-              seq: chunkSeq,
-              stream,
-              chunk: payloadChunk,
-              truncated: payloadChunk.length !== sanitizedChunk.length,
-            },
-          });
-        };
-        const onLog = (stream: "stdout" | "stderr", chunk: string) =>
-          appendIdentityRedactedLog(stream, identityRedactor.chunk(stream, chunk));
+        const { currentUserRedactionOptions, appendIdentityRedactedLog, onLog, onAdapterMeta, onAdapterEvent } =
+          await runOutput.begin(currentRun);
         if (runScopedMentionedSkillKeys.length > 0) {
           await onLog(
             "stdout",
@@ -3683,36 +3542,6 @@ export function heartbeatService(
             );
           }
         }
-        const onAdapterMeta = async (meta: AdapterInvocationMeta) => {
-          meta = identityRedactor.redact(meta);
-          if (meta.env && secretKeys.size > 0) {
-            for (const key of secretKeys) {
-              if (key in meta.env) meta.env[key] = "***REDACTED***";
-            }
-          }
-          await appendRunEvent(currentRun, {
-            eventType: "adapter.invoke",
-            stream: "system",
-            level: "info",
-            message: "adapter invocation",
-            payload: meta as unknown as Record<string, unknown>,
-          });
-        };
-
-        const onAdapterEvent = async (event: AdapterRuntimeEvent) => {
-          event = identityRedactor.redact(event);
-          const eventType = event.eventType.trim();
-          if (!eventType) return;
-          await appendRunEvent(currentRun, {
-            eventType: eventType.slice(0, 120),
-            stream: event.stream,
-            level: event.level,
-            color: event.color,
-            message: event.message,
-            payload: event.payload,
-          });
-        };
-
         const adapter = getServerAdapter(agent.adapterType);
         const durableGoalControlRun =
           readNonEmptyString(context.goalControlRequestId) !== null ||
@@ -4101,11 +3930,7 @@ export function heartbeatService(
         }
         await runCompletion.completeRun({
           run, agent, issueId, issueRef, signal: executionControl.controller.signal,
-          output: {
-            handle, outputProgressState, flushOutputProgress,
-            get stdoutExcerpt() { return stdoutExcerpt; },
-            get stderrExcerpt() { return stderrExcerpt; },
-          },
+          output: runOutput,
           session: { runtimeForAdapter, previousSessionParams, taskKey, configuredModel, sessionConfigMetadata },
           readFailureReportSecrets,
           adapterResult, sessionCodec, taskSessionForRun, sessionCompaction,
@@ -4236,11 +4061,7 @@ export function heartbeatService(
         }
         await runCompletion.failRun({
           run, agent, issueId, issueRef, signal: executionControl.controller.signal,
-          output: {
-            handle, outputProgressState, flushOutputProgress,
-            get stdoutExcerpt() { return stdoutExcerpt; },
-            get stderrExcerpt() { return stderrExcerpt; },
-          },
+          output: runOutput,
           session: { runtimeForAdapter, previousSessionParams, taskKey, configuredModel, sessionConfigMetadata },
           readFailureReportSecrets,
           runId, err, identityRedactor, requiredWorkspaceRestoreEvidence, legacyAdapterEntered,
