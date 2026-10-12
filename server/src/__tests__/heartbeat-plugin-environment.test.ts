@@ -43,7 +43,6 @@ vi.mock("../adapters/index.js", () => ({
     execute: adapterExecute,
     supportsLocalAgentJwt: false,
   }),
-  listAdapterModelProfiles: async () => [],
   runningProcesses: new Map(),
 }));
 
@@ -60,14 +59,16 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
   let stopDb: (() => Promise<void>) | null = null;
   let db!: ReturnType<typeof createDb>;
   const tempRoots: string[] = [];
+  const heartbeats: ReturnType<typeof heartbeatService>[] = [];
 
   beforeAll(async () => {
     const started = await startEmbeddedPostgresTestDatabase("heartbeat-plugin-environment");
-    stopDb = started.stop;
+    stopDb = started.cleanup;
     db = createDb(started.connectionString);
   }, 20_000);
 
   afterEach(async () => {
+    for (const heartbeat of heartbeats.splice(0)) await heartbeat.drainActiveRunExecutions();
     adapterExecute.mockClear();
     while (tempRoots.length > 0) {
       const root = tempRoots.pop();
@@ -113,6 +114,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
       name: "Acme",
       issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
       status: "active",
+      defaultResponsibleUserId: "responsible-user",
       createdAt: new Date(),
       updatedAt: new Date(),
     });
@@ -195,6 +197,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
     });
 
     const heartbeat = heartbeatService(db, { pluginWorkerManager: workerManager });
+    heartbeats.push(heartbeat);
     const run = await heartbeat.wakeup(agentId, {
       source: "on_demand",
       triggerDetail: "manual",
@@ -212,6 +215,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
       companyId,
       environmentId,
       executionWorkspaceId: expect.any(String),
+      executionWorkspaceSettings: null,
       issueId: null,
       config: { template: "base" },
       agentId,
@@ -345,6 +349,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
         name: "Acme A",
         issuePrefix: `T${companyAId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
         status: "active",
+        defaultResponsibleUserId: "responsible-user-a",
         createdAt: new Date(),
         updatedAt: new Date(),
       },
@@ -353,6 +358,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
         name: "Acme B",
         issuePrefix: `T${companyBId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
         status: "active",
+        defaultResponsibleUserId: "responsible-user-b",
         createdAt: new Date(),
         updatedAt: new Date(),
       },
@@ -429,6 +435,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
     ]);
 
     const heartbeat = heartbeatService(db, { pluginWorkerManager: workerManager });
+    heartbeats.push(heartbeat);
     const sharedRun = await heartbeat.wakeup(agentAId, {
       source: "on_demand",
       triggerDetail: "manual",
@@ -453,24 +460,27 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
 
     const acquireCalls = workerManager.call.mock.calls
       .filter(([, method]) => method === "environmentAcquireLease");
+    const acquirePayloads = acquireCalls.map(([, , payload]) => payload);
 
     expect(acquireCalls).toHaveLength(2);
-    expect(acquireCalls[0]?.[2]).toMatchObject({
-      companyId: companyAId,
-      environmentId: sharedEnvironmentId,
-      config: { template: "shared" },
-      agentId: agentAId,
-      runId: sharedRun!.id,
-      adapterType: "codex_local",
-    });
-    expect(acquireCalls[1]?.[2]).toMatchObject({
-      companyId: companyBId,
-      environmentId: overrideEnvironmentId,
-      config: { template: "override" },
-      agentId: agentBId,
-      runId: overrideRun!.id,
-      adapterType: "codex_local",
-    });
+    expect(acquirePayloads).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        companyId: companyAId,
+        environmentId: sharedEnvironmentId,
+        config: { template: "shared" },
+        agentId: agentAId,
+        runId: sharedRun!.id,
+        adapterType: "codex_local",
+      }),
+      expect.objectContaining({
+        companyId: companyBId,
+        environmentId: overrideEnvironmentId,
+        config: { template: "override" },
+        agentId: agentBId,
+        runId: overrideRun!.id,
+        adapterType: "codex_local",
+      }),
+    ]));
   }, 15_000);
 
   it("ignores stale non-reused workspace environment config in favor of the assignee selection", async () => {
@@ -513,6 +523,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
       name: "Acme",
       issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
       status: "active",
+      defaultResponsibleUserId: "responsible-user",
       createdAt: new Date(),
       updatedAt: new Date(),
     });
@@ -639,6 +650,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
       title: "Environment matrix: e2b / codex_local",
       status: "in_progress",
       priority: "medium",
+      responsibleUserId: "responsible-user",
       assigneeAgentId: agentId,
       executionWorkspaceId: staleExecutionWorkspaceId,
       executionWorkspaceSettings: {
@@ -649,6 +661,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
     });
 
     const heartbeat = heartbeatService(db, { pluginWorkerManager: workerManager });
+    heartbeats.push(heartbeat);
     const run = await heartbeat.wakeup(agentId, {
       source: "assignment",
       triggerDetail: "manual",
@@ -666,6 +679,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
       companyId,
       environmentId: newEnvironmentId,
       executionWorkspaceId: expect.any(String),
+      executionWorkspaceSettings: { mode: "shared_workspace" },
       issueId,
       config: { template: "new" },
       agentId,

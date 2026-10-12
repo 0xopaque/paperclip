@@ -1,6 +1,11 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo, Server as NetServer } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { Server as TlsServer } from "node:tls";
+
+import { removeTestHome } from "./remove-test-home.js";
 
 type SupertestServer = NetServer & {
   address(): ReturnType<NetServer["address"]>;
@@ -18,8 +23,34 @@ type SupertestTestConstructor = {
   };
 };
 
+// Keep the original home available only for read-only host port-lease checks.
+process.env.PAPERCLIP_TEST_HOST_HOME ??= process.env.PAPERCLIP_HOME?.trim() || path.join(os.homedir(), ".paperclip");
+
+// Receipt-spool recovery must never scan a developer's instance during tests.
+const paperclipTestHome = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-vitest-home-"));
+process.env.PAPERCLIP_HOME = paperclipTestHome;
+// Setup-file afterAll hooks run before suites drain asynchronous heartbeats.
+// Cleanup at worker exit, after all suite teardown, avoids deleting live state.
+// A run still finishing at exit can leave a read-only runtime-context bundle
+// under this home, which a plain recursive rm cannot remove.
+process.once("exit", () => removeTestHome(paperclipTestHome));
+
 const require = createRequire(import.meta.url);
 const SupertestTest = require("supertest/lib/test.js") as SupertestTestConstructor;
+
+if (!process.env.CODEX_HOME) {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-vitest-codex-home-"));
+  fs.writeFileSync(path.join(codexHome, "auth.json"), '{"OPENAI_API_KEY":"sk-vitest"}\n', { mode: 0o600 });
+  process.env.CODEX_HOME = codexHome;
+}
+
+// The automatic Tailscale HTTPS default (PAP-17158) probes for a real host
+// broker socket, so leaving it enabled would make every test that starts a
+// service named `paperclip-dev` behave differently on a broker-capable host
+// than on CI. Tests that exercise the default opt in explicitly.
+if (!process.env.PAPERCLIP_MANAGED_RUNTIME_HTTPS) {
+  process.env.PAPERCLIP_MANAGED_RUNTIME_HTTPS = "off";
+}
 
 if (!SupertestTest.prototype.__paperclipLoopbackPatched) {
   SupertestTest.prototype.serverAddress = function serverAddress(app, path) {
