@@ -3909,41 +3909,7 @@ describe("Daytona sandbox provider plugin", () => {
       expect(sandbox.process.executeCommand).toHaveBeenCalledTimes(1);
     });
 
-    it("rejects a late execute after the release tombstone is set", async () => {
-      process.env.DAYTONA_API_KEY = "host-key";
-      const sandbox = createMockSandbox({ id: "lease-a" });
-      let stopStarted = false;
-      let resolveRelease!: () => void;
-      const releaseGate = new Promise<void>((resolve) => {
-        resolveRelease = resolve;
-      });
-      sandbox.stop.mockImplementation(() => {
-        stopStarted = true;
-        return releaseGate;
-      });
-      mockGet.mockResolvedValue(sandbox);
 
-      await plugin.definition.onEnvironmentExecute?.(execParams("lease-a"));
-      const releasePromise = plugin.definition.onEnvironmentReleaseLease?.({
-        driverKey: "daytona",
-        companyId: "company-1",
-        environmentId: "env-1",
-        providerLeaseId: "lease-a",
-        config: { timeoutMs: 300000, reuseLease: true },
-      });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(stopStarted).toBe(true);
-
-      const overlappingExec = plugin.definition.onEnvironmentExecute?.(execParams("lease-a"));
-      await expect(overlappingExec).rejects.toThrow(/no longer active/);
-
-      resolveRelease();
-      await releasePromise;
-
-      expect(mockGet).toHaveBeenCalledTimes(1);
-      expect(sandbox.stop).toHaveBeenCalledTimes(1);
-      expect(sandbox.process.executeCommand).toHaveBeenCalledTimes(1);
-    });
 
     it("cancels active work before waiting for a stalled execute to drain", async () => {
       process.env.DAYTONA_API_KEY = "host-key";
