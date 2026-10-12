@@ -25,7 +25,7 @@ Open `/decisions`, then a queue at `/decisions/queues/:key` and its source item.
 
 Open `/search` or the navigation search entry.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Seed assigned, unread, blocked, and resolved tasks plus a pending decision. Record the combined Inbox/Tasks experimental setting.
 
@@ -48,6 +48,10 @@ Automated: [search page](../ui/src/pages/Search.test.tsx) and [company search se
 Manual: Search a unique task title and content phrase, open the result, and compare the actual record. Test filters, no results, and a second company. Verify stale results do not expose inaccessible data.
 
 ## Gotchas
+
+- Combined Inbox/Tasks requires both `enableCombinedInboxTasks` and
+  `enableStreamlinedUi`. [Standalone Inbox tests](../ui/src/pages/Inbox.test.tsx)
+  render archive/read controls and toolbars; this is not live multi-user evidence.
 
 - Personal archival is not task cancellation or completion.
 - Legacy Inbox routes can redirect to the combined task view; record which host actually rendered.

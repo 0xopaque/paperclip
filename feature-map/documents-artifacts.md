@@ -21,12 +21,15 @@ Open a document from the task thread or document side panel.
 ### `task-output`
 
 Open an attachment, output card, or file link from a task.
+For direct uploads, use the task side panel's **Open a new tab → Artifacts →
+Upload files** or drop files anywhere in that panel. On mobile, open
+**More actions → Properties** first. Agent conversations do not expose this upload path.
 
 ### `artifact-library`
 
 Open `/artifacts` and its grouping, search, and media controls.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a task with a text document, a small attachment, and a generated work product. Use nonsensitive fixture files.
 
@@ -38,9 +41,15 @@ Manual: Edit a paragraph, save, reload, and compare revisions. Add an annotation
 
 ### `task-output`
 
-Automated: [attachment routes](../server/src/__tests__/issue-attachment-routes.test.ts) and [work products](../server/src/__tests__/work-products.test.ts) cover data/access behavior; [artifact arrival browser suite](../tests/e2e/artifact-tab-arrival.spec.ts) targets the arrival experience.
+Automated: [attachment routes](../server/src/__tests__/issue-attachment-routes.test.ts) and [work products](../server/src/__tests__/work-products.test.ts) cover data/access behavior; [artifact arrival browser suite](../tests/e2e/artifact-tab-arrival.spec.ts) targets arrival. [Artifact uploads](../tests/e2e/artifact-uploads.spec.ts) drives file selection/drop, filename collisions, retry, and preservation of paused/unassigned tasks.
 
-Manual: Upload a fixture and have the test task produce an output. Preview and download each, compare the contents, and follow the source task link. Reload and test an inaccessible user/company; verify missing workspace-only resources have an explicit state.
+Manual: Upload a small Markdown file and CSV through Artifacts. Markdown becomes
+a versioned task document; other files become attachments. Read the document,
+download the CSV and compare bytes, then reload. Upload the same Markdown filename
+again and verify a separate suffixed document without overwriting the original.
+On a paused unassigned task, confirm upload does not start work or add comments.
+Verify agent-produced work products separately using an eligible test run.
+Test an inaccessible user/company and explicit missing workspace-only resources.
 
 ### `artifact-library`
 

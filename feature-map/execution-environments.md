@@ -17,12 +17,16 @@ Implementation: [environment settings](../ui/src/pages/CompanyEnvironments.tsx),
 ### `environment-settings`
 
 Open Settings → Environments, then create/edit a supported target.
+The canonical URL is `/company/settings/instance/environments`. Enable
+`enableEnvironments` first; keep `enableManagedSandboxOnly` off to inspect local
+targets. The catalog is instance-scoped and mutation requires a local operator
+or instance administrator.
 
 ### `remote-execution`
 
 Choose the environment in agent/project/workspace configuration, then inspect the resulting task/run and workspace.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use an owned disposable target and a supported provider plugin. Record provider, target identity, account, and spending constraints before a live remote run.
 
@@ -31,6 +35,10 @@ Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use 
 Automated: [environment UI](../ui/src/pages/CompanyEnvironments.test.tsx), [driver configuration UI](../ui/src/pages/CompanySettings.test.tsx), and [environment service](../server/src/__tests__/environment-service.test.ts) cover configuration behavior.
 
 Manual: Save a disposable target, reload it, and run its available probe. Verify both success and missing-credential/reachability errors identify the target. Confirm unavailable providers are not offered as working run targets.
+
+The local row has no UI Test button. Its API/CLI probe reports host/cwd
+availability only; it does not validate an adapter binary, workspace, or task
+execution. Remote-driver probes and a real bounded run need their own evidence.
 
 ### `remote-execution`
 

@@ -26,15 +26,22 @@ Open `/issues` or a project’s Issues view; legacy `/tasks` links redirect.
 
 Open `/issues/:issueId` from a row, mention, or direct link.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
-Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use an invokable test agent and a project; record whether a real or simulated harness handles the request.
+Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a
+disposable project. Persistence checks can assign work to Me or leave it
+unassigned; execution checks additionally need an invokable test agent. Record
+whether a real or simulated harness handles execution.
 
 ### `new-task`
 
 Automated: [creation dialog](../ui/src/components/NewIssueDialog.test.tsx) is component coverage with mocked requests.
 
 Manual: Create a uniquely named task with an agent and project. Open its resulting link and reload. Confirm text, attachment, assignment, and project persisted, and verify execution started only when the task and agent are eligible.
+
+Creation is request-first: enter **Describe a task…**, choose the assignee and
+project, and submit **Create task**. A standalone title field is not always shown.
+Use a human/unassigned task to verify persistence without invoking a model.
 
 ### `task-list`
 
@@ -49,6 +56,8 @@ Automated: [task detail](../ui/src/pages/IssueDetail.test.tsx) covers component 
 Manual: Add a comment and edit authorized properties. Reload and verify history, actor, and values. Complete a disposable task and inspect its deliverable; reopen through an available action and confirm the next execution follows current policy.
 
 ## Gotchas
+
+- Priority remains an API field, but ordinary priority UI editing is hidden.
 
 - A status label alone does not prove that the requested work exists.
 - Single-assignee and atomic checkout rules still apply when tasks are created from different hosts.

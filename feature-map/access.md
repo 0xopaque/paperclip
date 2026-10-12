@@ -21,12 +21,15 @@ Open `/auth`; first-owner bootstrap uses `/board-claim/:token` when configured.
 ### `invite-members`
 
 Open `/invite/:token`; operators manage members in company settings and join requests at `/inbox/requests`.
+Create/revoke human links at Members → Invites
+(`/company/settings/members?tab=invites`). Human invitees receive the chosen
+role after sign-in; agent invitations still use join-request approval.
 
 ### `cli-authorization`
 
 Start the CLI auth/connect flow and approve its `/cli-auth/:id` browser page; instance access is under Settings when visible.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). For login tests use authenticated mode and two test users; local-trusted mode does not prove session enforcement. Use two companies for isolation checks.
 
@@ -47,6 +50,10 @@ Manual: Accept an invite as the intended user, inspect the resulting company and
 Automated: [board auth client](../cli/src/__tests__/board-auth.test.ts) and [token commands](../cli/src/__tests__/token.test.ts) cover the client contracts.
 
 Manual: Authorize the intended CLI context, make a read-only company request, then revoke its token and retry. Verify failure is explicit and does not silently fall back to another identity.
+
+Use `auth login`, `auth whoami`, and `auth revoke-current` with explicit context.
+Retry with the same bearer to prove revocation; deleting local credentials with
+logout alone does not establish that server revocation succeeded.
 
 ## Gotchas
 

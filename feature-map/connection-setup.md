@@ -57,7 +57,7 @@ or open `/apps/chat/connect`. Complete that provider's endpoint setup, then
 open its settings (`/apps/chat/:endpointId/settings`). Follow identity linking
 as the intended sender before messaging the agent externally.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey).
 Choose a disposable provider account/resource and record its auth method,
@@ -137,6 +137,10 @@ the endpoint's pause behavior. Repeat independently for each provider at issue;
 Slack setup does not qualify Discord, Telegram, GitHub, email, or iMessage.
 
 ## Gotchas
+
+- Private endpoint rejection depends on deployment: owned loopback MCP servers
+  are supported in local-trusted/private instances. Public authenticated
+  deployments apply the private-network restriction.
 
 - A successful OAuth callback is not proof of saved connection access or task
   continuation. Verify all three checkpoints.

@@ -21,7 +21,7 @@ Open Settings → Plugins where permitted, or the CLI plugin commands.
 
 Open `/plugins/:pluginId`, a registered plugin route, or its contributed company/project settings surface.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a known local fixture plugin with bounded capabilities. Record installed version and any declared external dependencies.
 
@@ -38,6 +38,11 @@ Automated: [static plugin UI](../server/src/__tests__/plugin-ui-static.test.ts) 
 Manual: Open the contributed page by navigation and cold deep link, perform a harmless plugin action, and inspect its real outcome. Switch company and test an actor without the capability. Reload with the plugin unavailable and verify the host reports that state.
 
 ## Gotchas
+
+- Installation/lifecycle is instance-level; configuration can be company-scoped.
+  Settings lives at `/company/settings/instance/plugins`. npm installation and
+  bundled-local installation are different controls. Developer file-watcher
+  reload is not a lifecycle action in the plugin manager.
 
 - Installing a plugin does not authorize every host capability or external action.
 - Plugin-provided routes are dynamic; this map covers the host lifecycle, not every third-party feature.

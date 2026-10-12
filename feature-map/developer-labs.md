@@ -21,7 +21,7 @@ Use `/design-guide`, registered `/ux-lab/...` routes, or Storybook; consult `ui/
 
 Open `/tests/perf/long-thread` only in an appropriate development environment.
 
-## Driving it
+## Driving it with Playwright
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a development/test environment. Confirm the route is registered for the current build before claiming the page is available.
 
@@ -35,9 +35,14 @@ Manual: Open the specific fixture state, inspect controls and layout, then repea
 
 Automated: [task thread component](../ui/src/components/IssueChatThread.test.tsx) does not establish a performance budget. Timing/scroll measurements need a dedicated browser run.
 
-Manual: Record browser/build/data size, exercise scrolling and composing in the fixture, and retain timing or trace evidence. Confirm a representative real task does not regress before extrapolating fixture measurements.
+Manual: Record browser/build/data size, exercise scrolling and rendering in the
+long-thread fixture, and retain timing or trace evidence. Its composer is
+disabled; test composing separately in a real task. Confirm representative
+real-task behavior before extrapolating fixture measurements.
 
 ## Gotchas
 
 - An unmounted or obsolete lab file remains in the conservative page inventory but is not a shipped entry point.
+- Intended developer use is not a universal runtime gate: Design Guide and
+  global lab/performance routes are also registered in production builds.
 - Screenshots of a lab do not prove live provider behavior, persistence, or authorization.

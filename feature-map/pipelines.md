@@ -21,7 +21,7 @@ Open `/pipelines`, `/pipelines/:pipelineId`, and its Settings route.
 
 Open `/pipelines/:pipelineId/items/:caseId`, `/review-queue`, or `/learnings`.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Enable pipelines and prepare a disposable pipeline with at least two stages and a fixture agent. Record any associated case type.
 
@@ -38,6 +38,10 @@ Automated: [pipeline tutorial browser suite](../tests/e2e/pipelines-tutorial-flo
 Manual: Open a pending review, inspect its source output and revision, accept or reject, and verify the persisted stage outcome. Follow a learning record to its source context and confirm it belongs to the intended pipeline/company.
 
 ## Gotchas
+
+- Learnings is filtered case-event history, such as review decisions and forced
+  moves, not a separate authored learning-record system. The UI visibility flag
+  is separate from API authorization.
 
 - These routes are experimental and may redirect or deny access when disabled.
 - ReviewQueue and Learnings are hosted from the pipeline module; a page-file inventory alone misses them.

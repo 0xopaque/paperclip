@@ -21,7 +21,7 @@ Open `/cases` and switch between available grouped/tree views.
 
 Open `/cases/:caseIdentifier` or a task’s linked case.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Enable cases and prepare related records with different types/statuses plus an associated task.
 
@@ -35,9 +35,15 @@ Manual: Search for a child, verify its parent context remains understandable, ch
 
 Automated: [case routes](../server/src/__tests__/cases-routes.test.ts) covers API behavior; [case fields](../ui/src/components/CaseFieldsPanel.test.tsx) covers field UI separately.
 
-Manual: Edit an offered field, reload, inspect its revision/activity, and follow child and task links. Verify cross-company and invalid field changes fail clearly. Distinguish a pipeline-owned item from a stand-alone case.
+Manual: Change status or labels, reload, inspect activity, and follow child/task
+links. Edit a case document and inspect its document revisions separately.
+Arbitrary JSON fields are currently displayed without a general field editor.
+Verify cross-company and invalid changes fail clearly. Distinguish a
+pipeline-owned item from a stand-alone case.
 
 ## Gotchas
 
 - A case is not a task execution; inspect linked tasks to prove work occurred.
-- Feature gating and case-type schema determine which actions are available.
+- Feature gating and offered controls determine available actions. The API
+  accepts a string case type and arbitrary JSON fields; do not infer typed
+  case-field validation or a field-editing UI from those values.

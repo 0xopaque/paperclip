@@ -22,7 +22,7 @@ Use `paperclipai install`, `run`, `service`, `doctor`, `configure`, `channels`, 
 
 Use currently visible instance settings for experiments/access and `paperclipai db:backup --help` for one-off backup. Some legacy general-settings URLs redirect.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a disposable data directory/service identity. Do not update, restart, or restore over an unrelated live instance as a documentation test.
 
@@ -39,6 +39,11 @@ Automated: [experimental settings](../ui/src/pages/InstanceExperimentalSettings.
 Manual: Change a harmless experimental setting, reload, and confirm the affected route honors it. Back up a disposable instance, inspect the reported file and metadata, and restore using the documented procedure into a second isolated target. Verify a known record after restoration.
 
 ## Gotchas
+
+- Source-checkout update/check commands report manual update guidance; they do
+  not qualify a managed installation. Rollback restores retained CLI payloads,
+  not database migrations. Service status applies to its selected service
+  identity, not automatically to an owned foreground dev server.
 
 - A successful backup write does not prove restoration works.
 - Settings visibility and mutability differ for cloud-managed and self-hosted instances.

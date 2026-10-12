@@ -9,7 +9,7 @@ Product behavior is still governed by [the implementation spec](../doc/SPEC-impl
 
 The map is organized by user capability, not by source file. It covers **35 feature
 families** across the product, CLI, and operator workflows, checked against source
-on 2026-10-05. Experimental and developer-only surfaces are labeled explicitly.
+on 2026-10-12. Experimental and developer-only surfaces are labeled explicitly.
 Each recipe includes sub-features, current entry points, automated evidence,
 manual verification steps, and gotchas.
 
@@ -113,7 +113,10 @@ fixture integration. Record executed results separately from the map.
    persisted state or continuation. Use read-only API checks to corroborate UI
    evidence; creating state through the API does not prove the creation UI.
 
-For agent-driven acceptance work, the existing
+For agent-driven acceptance work, start with the
+[Paperclip verification skill](../.agents/skills/verify-paperclip/SKILL.md) for an
+isolated launch, ownership/readiness checks, browser driving, evidence, and cleanup.
+It uses this directory as its feature map. The existing
 [dev-workspace run/verify skill](../.agents/skills/paperclip-dev-workspace-run-verify-fix/SKILL.md)
 and [evaluation skill](../.agents/skills/paperclip-evals/SKILL.md) describe runtime
 ownership and evidence handling. Reuse them; this map introduces no environment
@@ -168,10 +171,13 @@ Each recipe starts with an H1 and a user-visible description, then exactly:
 
 1. **Sub-features** — stable backticked IDs and observable behavior/states.
 2. **How to get to it (user POV)** — one H3 backticked entry-point ID per surface.
-3. **Driving it** — starts with `Preconditions:`; repeat each entry-point H3,
+3. **Driving it with <harness>** — starts with `Preconditions:`; repeat each entry-point H3,
    with `Automated:` and `Manual:` paragraphs. Name test scope and gaps honestly.
 4. **Gotchas** — misleading look-alikes, feature gates, and invalid evidence.
 
-The format is inspired by
+New or updated entries follow
+[Poteto's feature-map examples](../.agents/skills/create-verification-skill/references/feature-map-example/).
+Existing entries with a `Driving it` heading can adopt the named harness when
+their recipes are updated. The original format was inspired by
 [Omnigent's feature map](https://github.com/omnigent-ai/omnigent/tree/91acfbbb59f6fc210ff95a9e9428aadd62e06582/feature-map).
 Paperclip's recipes and checks follow its own task model and test infrastructure.

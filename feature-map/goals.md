@@ -20,7 +20,7 @@ Open `/goals`, create a goal, and enter `/goals/:goalId`.
 
 Inspect the goal context from a project or task and compare explicit versus inherited context.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Prepare two goals and a disposable project/task in the selected company.
 
@@ -28,7 +28,12 @@ Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Prep
 
 Automated: [project-goal validation](../server/src/__tests__/project-goal-validation.test.ts) covers relationship validation; [goal detail control](../ui/src/pages/GoalDetail.test.tsx) only tests the properties toggle, not the whole creation journey.
 
-Manual: Create a parent and child goal, save owner/status changes, and reload. Link a project and task through the offered controls, follow their goal context, and verify a cross-company or invalid relationship is rejected.
+Manual: Choose **Add Goal/New Goal**, enter **Goal title**, select the level, and
+create a parent. Open it and choose **Sub Goal** to create a child with the
+parent preselected. Change status in Properties and reload; follow the Parent
+Goal link and inspect Sub-Goals. Owner is currently display-only in this UI.
+Link a project and task through the offered controls, follow their goal context,
+and verify a cross-company or invalid relationship is rejected.
 
 ### `task-goal-context`
 

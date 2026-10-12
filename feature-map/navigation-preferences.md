@@ -22,7 +22,7 @@ Use starred/recent/sidebar links and direct company-prefixed URLs.
 
 Use Settings → Profile, `/u/:userSlug`, and the announcement well when a publication is available.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use two test users and companies; record the selected UI shell and any client-local preference storage.
 
@@ -31,6 +31,11 @@ Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use 
 Automated: [sidebar](../ui/src/components/Sidebar.test.tsx) and [sidebar preference routes](../server/src/__tests__/sidebar-preferences-routes.test.ts) cover UI/server behavior.
 
 Manual: Star and reorder supported resources, collapse a section, navigate and reload. Switch company/user and inspect the intended preference scope. Open an unavailable resource and a legacy route; verify clear fallback or correct redirect without leaking another company’s state.
+
+Record persistence separately: section collapse is in-memory and reopens after
+reload; global sidebar collapse is disabled. Streamlined starred projects sort
+alphabetically. Recents are browser-local by user/company; stars and supported
+ordering are saved server-side. Local-trusted mode does not prove two-user isolation.
 
 ### `profile-announcements`
 

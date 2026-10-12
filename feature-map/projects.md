@@ -21,7 +21,7 @@ Open `/projects`, create a project, and enter its overview or Issues view.
 
 Open `/projects/:projectId/configuration` and its repository/workspace settings.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a disposable project and a small repository you can access; record checkout and credential ownership.
 
@@ -38,6 +38,13 @@ Automated: [repository persistence](../server/src/__tests__/project-repositories
 Manual: Attach a small repository, save, and create a project task. Inspect the actual checkout/revision used by its run. Test an invalid repository and missing credentials without treating a saved URL as a working workspace.
 
 ## Gotchas
+
+- `/overview` now selects Configuration, not a distinct overview page. Personal
+  join/leave and star controls have their own persistence and should be checked
+  when affected; **Star/Unstar {project name}** is the visible star action.
+- Project name slugs change on rename and have no historical alias lookup.
+  Reopen a renamed project through its stable UUID route, wait for the current
+  Configuration form, and record the newly normalized URL before reloading.
 
 - Project repository configuration and a provisioned execution workspace are different records.
 - See [workspaces](./workspaces.md), [goals](./goals.md), and [budgets](./budgets-costs.md) for those features.

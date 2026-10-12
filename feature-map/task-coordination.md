@@ -21,9 +21,13 @@ Open the task’s parent/child and dependency links in task detail.
 
 Inspect the task’s execution policy and available review, pause, resume, or stop controls.
 
-## Driving it
+## Driving it with Playwright and the Paperclip API
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Prepare a parent, child, and dependent task plus implementer/reviewer agents. Record execution policy and use a disposable tree.
+
+Parent/dependency navigation and inherited tree holds can be checked on unassigned
+tasks. Agents are required for the continuation and signoff portion. A tree pause
+creates a hold; it does not change task statuses to a paused status.
 
 ### `task-relationships`
 

@@ -22,9 +22,13 @@ Message the configured bot/address from its external provider and follow the cor
 
 Open `/apps/chat/:endpointId/settings` and the endpoint’s other available tabs; identity confirmation uses `/chat-identity/confirm`.
 
-## Driving it
+## Driving it with Playwright and provider clients
 
-Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Enable chat connectors and use a test provider account/channel with permission to send messages. Setup is covered in [connection setup](./connection-setup.md).
+Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a
+test provider account/channel with permission to send messages. Gates differ:
+AgentMail bypasses the chat-connectors UI gate, GitHub uses
+`enableGitHubReviewBots`, and other chat providers use `enableChatConnectors`.
+Setup is covered in [connection setup](./connection-setup.md).
 
 ### `external-thread`
 
@@ -39,6 +43,9 @@ Automated: [channel integration](../server/src/__tests__/chat-channels.integrati
 Manual: Inspect the bound agent and identity, recent activity, and delivery failure details. Repair a disposable credential, retry a safe message when offered, and verify exactly one external reply. Disable the endpoint and confirm new traffic is not silently processed.
 
 ## Gotchas
+
+- Visibility flags do not pause existing delivery. Disable the disposable
+  endpoint itself to test stopped traffic.
 
 - One provider’s passing fixture does not qualify another provider or live delivery.
 - An accepted send request does not prove the recipient received the message or file.

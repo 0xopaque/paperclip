@@ -22,7 +22,7 @@ Use the task’s workspace card or Files panel and follow its workspace link.
 
 Open `/workspaces`, a project workspace, or `/execution-workspaces/:workspaceId` and its Services/Configuration/Runtime logs views.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Enable isolated-workspace UI where needed. Use an owned disposable repository and environment; record workspace ID and branch.
 
@@ -39,6 +39,11 @@ Automated: [workspace detail](../ui/src/pages/ExecutionWorkspaceDetail.test.tsx)
 Manual: Provision a disposable workspace, wait for readiness, start an available service, open its endpoint, and inspect a real response and logs. Stop it and verify it actually stops. Exercise close/reopen only after inspecting pending changes and active runs.
 
 ## Gotchas
+
+- UI visibility, default isolation policy, the local environment row, a workspace
+  record, and a running service are distinct prerequisites. A fresh instance
+  still needs an owned cwd/repository and runtime commands; `/workspaces` lists
+  existing work. Reopening depends on lifecycle, not a generic detail action.
 
 - A link or running badge does not prove the service is reachable from the user’s browser.
 - Workspace IDs, runtime leases, and repository paths are not interchangeable.

@@ -6,7 +6,8 @@ Implementation: [hiring](../ui/src/pages/NewAgent.tsx), [configuration](../ui/sr
 
 ## Sub-features
 
-- `hire`: choose role, manager, adapter, model, and required account settings.
+- `hire`: choose identity, adapter, model, and required account settings; edit
+  reporting relationships through the agent configuration afterward.
 - `instructions`: edit agent configuration and instruction files with durable revisions.
 - `organization`: inspect and change reporting relationships through supported controls.
 - `lifecycle`: pause/resume or retire an agent while preserving history.
@@ -26,7 +27,7 @@ Open `/agents/:agentId` and the configuration/instruction surfaces it exposes.
 
 Use the roster’s organization view; `/org` redirects to the roster in the streamlined shell.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a disposable company and supported adapter; hiring may require a formal approval.
 
@@ -35,6 +36,11 @@ Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use 
 Automated: [new agent page](../ui/src/pages/NewAgent.test.tsx) and [configuration form](../ui/src/components/AgentConfigForm.render.test.tsx) cover mocked UI behavior.
 
 Manual: Hire an agent with a distinct name and role. Complete any required approval, reload the roster, and open its configuration. Confirm manager, adapter, and model persisted; run a small task to prove execution readiness.
+
+The current hiring wizard assigns the first hire CEO and subsequent hires
+General reporting to the CEO. Change manager/role afterward through supported
+configuration. Process/HTTP agents can be created through API/CLI but are excluded
+from the hiring picker; API fixture creation does not prove this UI journey.
 
 ### `agent-configuration`
 

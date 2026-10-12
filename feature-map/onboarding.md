@@ -17,12 +17,15 @@ Implementation: [web wizard](../ui/src/components/OnboardingWizard.tsx), [CLI se
 ### `web-wizard`
 
 Open `/onboarding` or the onboarding launcher in an empty company context.
+Use `/<company-prefix>/onboarding` to resume an existing company's agent setup;
+the unprefixed route starts at organization naming on self-hosted instances.
+Cloud-managed instances reuse their existing company for agent setup.
 
 ### `cli-setup`
 
 Use `paperclipai onboard --help` or `paperclipai run --help` to select an isolated data directory before setup.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a new isolated data directory and record deployment mode. A configured adapter may still need account authentication.
 
@@ -30,7 +33,20 @@ Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use 
 
 Automated: [wizard tests](../ui/src/components/OnboardingWizard.test.tsx) cover mocked wizard behavior; [onboarding browser suite](../tests/e2e/onboarding.spec.ts) supplies its own test environment. Live model execution is a separate check.
 
-Manual: Create a disposable company and first agent. Save and leave midway, reopen, and finish. Follow the created first task, verify the selected agent and company, and inspect its output or explicit authentication gate. Reload both company and task.
+- **Create company and resume.** Start a fresh empty instance and run doctor using
+  the [verification skill](../.agents/skills/verify-paperclip/SKILL.md). Run
+  `node .agents/skills/verify-paperclip/scripts/onboarding-smoke.mjs --evidence-dir "$VERIFY_EVIDENCE_DIR"`.
+  The helper opens `/onboarding` in a fresh self-hosted instance, enters a unique
+  name in `e.g. Northwind Labs`, and chooses `Continue`. The agent-name field must
+  appear and the saved company must have no invented goal. Reopen the
+  company-prefixed onboarding route and reload; the agent step must appear
+  without creating another company. Screenshots and a trace capture the real UI action and result.
+  This proves company creation/resumption, not hiring or a first model run.
+
+Manual: Create a disposable company and first agent. Leave midway, reopen the
+company's onboarding route, and finish; drafts save automatically. Follow the
+created first task, verify the selected agent and company, and inspect its output
+or explicit authentication gate. Reload both company and task.
 
 ### `cli-setup`
 

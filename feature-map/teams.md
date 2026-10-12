@@ -21,7 +21,7 @@ Use the CLI teams catalog/preview/install operations in the selected context.
 
 The catalog components and install wizard are available in developer tests/design surfaces. No top-level `/teams` route is registered; use the CLI/API for the current installation workflow.
 
-## Driving it
+## Driving it with the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a disposable company, a small catalog entry, and explicit company context. Check `paperclipai teams --help` for current subcommands.
 
@@ -38,6 +38,10 @@ Automated: [catalog component](../ui/src/pages/TeamCatalog.test.tsx) and [instal
 Manual: When changing or mounting these components, exercise preview, manager/source options, cancellation, failed install, and success. Follow created agents in the actual company. Record whether this was a component harness or a real product entry point.
 
 ## Gotchas
+
+- Catalog preview records an audit event but installs no agents/projects. Use
+  `teams browse/inspect/preview` with explicit company and origin API context;
+  the current product has no `/teams` route.
 
 - Source files do not prove that a screen is reachable in the current app.
 - Installed team configuration may still need credentials or environment setup.

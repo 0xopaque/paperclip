@@ -21,7 +21,7 @@ Use Activity → Costs/Budgets in the streamlined shell, `/costs` in the product
 
 Open the governing budget configuration and any resulting budget incident card.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use synthetic low-cost events and small disposable budgets. Do not buy model usage merely to hit a threshold.
 
@@ -29,7 +29,10 @@ Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use 
 
 Automated: [costs service](../server/src/__tests__/costs-service.test.ts) covers cost contracts; [embedded costs UI](../ui/src/pages/Costs.test.tsx) has narrow Audit-host coverage.
 
-Manual: Inspect a known fixture run and reconcile its recorded spend with the selected report period and resource. Switch company/project filters and reload. Check empty and unavailable cost data without treating missing data as zero spend.
+Manual: Inspect a known fixture run and reconcile recorded spend with the chosen
+period and resource. Switch the report period/company and inspect the **By
+project** breakdown; it is not a project-selector filter. Reload and check empty
+or unavailable cost data without treating missing data as zero spend.
 
 ### `budget-enforcement`
 

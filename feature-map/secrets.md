@@ -22,7 +22,7 @@ Open company Settings → Secrets and the company/personal secret views.
 
 Use the Proposals tab or Import from vault where available.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use dummy credentials in an isolated company, two user identities, and a test agent. Never print actual secret values in evidence.
 
@@ -39,6 +39,10 @@ Automated: [proposal routes](../server/src/__tests__/secret-proposals-routes.tes
 Manual: Review a dummy proposal, reject one and accept another, then inspect the resulting reference state and history. Preview a vault import, select only disposable entries, and verify imported references and denied-access errors after reload.
 
 ## Gotchas
+
+- Vault import currently targets eligible AWS Secrets Manager providers.
+  Organization-secret checks in local-trusted mode do not establish two-user
+  personal-secret ownership or actual external-vault import.
 
 - A displayed reference name is not proof that the actor can resolve its value at runtime.
 - Company secrets and user-specific values have different ownership.

@@ -25,7 +25,7 @@ Ask for project work in Agent Chat and follow its created project/task links.
 
 Open `/board-chat` only when its conference-room gate is enabled.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Enable the applicable chat feature, use a configured test agent, and distinguish model replies from a mocked conversation fixture.
 
@@ -33,7 +33,10 @@ Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Enab
 
 Automated: [chat landing](../ui/src/pages/AgentChats.test.tsx) checks recent-chat routing; [conversation service](../server/src/__tests__/agent-conversations.test.ts) covers persisted conversation behavior.
 
-Manual: Start a conversation, send a recognizable request, and inspect its reply. Navigate away and reopen the same history. Test a new conversation, unavailable historical agent, and an inaccessible saved conversation; verify no cross-user or cross-company history appears.
+Manual: Start a conversation, send a recognizable request, and inspect its reply.
+Navigate away and reopen the same history. Use `/new` for a fresh session within
+the same standing conversation. Test an unavailable historical agent and an
+inaccessible saved conversation; verify no cross-user or cross-company history appears.
 
 ### `project-handoff`
 
@@ -44,6 +47,10 @@ Manual: Ask the configured agent to create bounded project work, inspect the pro
 ### `conference-room`
 
 Automated: [board chat gate](../server/src/__tests__/board-chat-route-feature-flag.test.ts) proves route gating, not a live conversation.
+
+Preconditions for this entry point: `local_trusted` mode and an installed,
+authenticated `claude` CLI, in addition to the Conference Room flag. These are
+separate from Agent Chat's configured-agent prerequisites.
 
 Manual: Check disabled access first, enable in the disposable instance, then send and reload a conversation. Inspect the actual responding agent and persisted history; report this result separately from Agent Chat.
 

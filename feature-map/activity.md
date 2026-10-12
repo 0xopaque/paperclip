@@ -22,7 +22,7 @@ Open `/dashboard` or `/dashboard/live`.
 
 Open `/activity`, `/activity/runs`, or `/activity/timeline` in the streamlined shell; legacy routes may redirect.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Prepare known task mutations and completed/failed runs in a disposable company, recording their IDs and actors.
 
@@ -37,6 +37,11 @@ Manual: Compare the dashboard with the known fixture tasks and runs. Start and f
 Automated: [activity service](../server/src/__tests__/activity-service.test.ts), [audit runs](../ui/src/pages/audit/AuditRuns.test.tsx), and [routine audit](../ui/src/pages/audit/RoutineAuditActivity.test.tsx) cover these separate data/host layers.
 
 Manual: Find a known mutation by actor/resource and a known run by status. Change filters, load more, and follow the source links. Reload the chosen view and verify no company leakage or duplicate events. Inspect a routine run from its audit entry.
+
+Audit-event Load more and run listings differ: Runs currently loads at most 200
+entries without pagination. The tested RoutineAuditActivity component has no
+registered activity-route host; inspect execution links actually offered by
+the routine rather than treating that component test as a reachable journey.
 
 ## Gotchas
 

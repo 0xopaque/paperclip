@@ -6,7 +6,7 @@ Implementation: [gateways](../ui/src/pages/apps/gateways/GatewaysList.tsx), [gat
 
 ## Sub-features
 
-- `gateway`: create/edit an endpoint and select its exposed apps/tools.
+- `gateway`: create/edit an endpoint backed by a tool access profile.
 - `profiles`: define reusable tool access configuration and inspect draft/detail state.
 - `client-connect`: copy the intended endpoint/configuration to an authorized test client.
 - `tokens`: create/revoke client credentials and verify their scope.
@@ -22,9 +22,14 @@ Open `/apps/gateways`, then a gateway’s Overview, Apps/Tools, Tokens, and Acti
 
 Open `/apps/advanced/profiles`, create a profile, or follow its detail/edit route.
 
-## Driving it
+## Driving it with Playwright and an MCP client
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use a fixture tool connection and test client. Record gateway/profile, token owner, transport, and selected company.
+
+Gateway creation selects a profile. Maintain that profile's app/action selection
+through the Apps/Tools links; the gateway form is not a separate tool picker.
+Use an active organization member for human-scoped access, and check the actual
+endpoint authorization independently of whether the admin UI is visible.
 
 ### `gateway-client`
 

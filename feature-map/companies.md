@@ -21,7 +21,7 @@ Use the company switcher or `/companies`, then enter company Settings.
 
 Use `/company/export` and `/company/import` where enabled, or the corresponding CLI company commands.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Use two disposable companies and a small package fixture. Record cloud-managed restrictions and visible settings gates.
 
@@ -38,6 +38,10 @@ Automated: [portability routes](../server/src/__tests__/company-portability-rout
 Manual: Export a small company, inspect the package preview, and import into a disposable target. Verify counts, references, conflict choices, and agent configuration. Run one imported task after supplying its required local credentials. Confirm source company data is unchanged.
 
 ## Gotchas
+
+- Restore an archived company through `/companies` → its menu → **Unarchive**.
+  Archiving pauses eligible agents and cancels active runs; restoration handles
+  agents paused specifically for company archival.
 
 - Package presence does not prove a runnable imported company; credentials and environment bindings need separate verification.
 - Company deletion is a distinct gated operation; do not use it as the archive test.

@@ -21,7 +21,7 @@ Open an agent’s model/adapter configuration or the instance adapter settings p
 
 Open an agent run at `/agents/:agentId/runs/:runId` from the agent or task activity.
 
-## Driving it
+## Driving it with Playwright and the Paperclip CLI
 
 Preconditions: follow the [baseline](./README.md#before-driving-a-journey). Record adapter, model, account, native/legacy runtime, and environment. Capabilities vary; one harness result is not a matrix-wide qualification.
 
@@ -38,6 +38,10 @@ Automated: [live run routes](../server/src/__tests__/agent-live-run-routes.test.
 Manual: Start a disposable task, open its running transcript, and follow it to a terminal outcome. Reload and compare task/run IDs, status, output, and cost. Verify a failed run remains distinguishable from a completed run with useful output.
 
 ## Gotchas
+
+- Model accounts are managed in Apps and inline agent account controls.
+  `/company/settings/connections` configures decision/fast-response models,
+  not the general model-account library.
 
 - The run log is instance database data; it is not the opt-out first-party Telemetry system or operator-configured OpenTelemetry tracing.
 - Authentication/model discovery does not establish tool, image, steering, or resumption capability parity.
