@@ -1457,6 +1457,19 @@ Claude, which can reject unavailable models. Package/version verification is
 independent of model selection. Environment tests verify runtime installation;
 a successful provider run additionally verifies credentials and model access.
 
+The server must install and bundle `@agentclientprotocol/claude-agent-acp`
+at the qualified version, including the patched bridge and pinned SDK. The
+vendor dependency check covers this dynamic lookup as well as ordinary imports.
+Source builds bind the vendored runner to the workspace's pnpm store while
+keeping the server manifest as its provider authority. Published npm bundles
+retain the pinned SDK JavaScript and declare its native packages as server
+optional dependencies, so npm installs the executable for the consumer's
+platform. Runtime admission still checks the exact version and executable digest.
+A missing provider package is reported as **Runtime missing**, with automatic
+retries stopped. Reinstall or rebuild Paperclip with its provider dependencies,
+restart the server, and run the agent's runtime test before retrying the task.
+Changing the model or signing in again cannot repair a missing runtime package.
+
 ACPX Claude supports Linux x64 and macOS ARM64/x64 with pinned SDK executables.
 On macOS the launcher uses private verified module/executable snapshots instead
 of Linux `/proc` descriptors. Dependency isolation, process ownership, and
