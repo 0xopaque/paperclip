@@ -125,3 +125,50 @@ this slice to `paperclipai/paperclip`; subsequent extractions are not part of
 this PR.
 
 Review and final verification: [PR #15823](https://github.com/paperclipai/paperclip/pull/15823).
+
+## Authorized stacked continuation
+
+The user requested at least five stacked PRs on 2026-10-10. Continue the four
+remaining boundaries in order, with each branch based on its predecessor. Keep
+merge and deployment outside this series. Each PR carries its own current-head
+verification and review results; do not transfer a prior head's pass to a new one.
+
+### Slice 2: resource reconciliation and availability
+
+The lifecycle handler also owns credential replacement, delivery claims and
+runtime shutdown. Keep those responsibilities in the service. Extract the full
+non-GitHub availability transaction, inventory reconciliation, repository rename
+handling, provider ordering, resource listing and audited selection together.
+The factory takes the database, endpoint lookup, existing credential lease
+function, generation reader and error text limit. It creates no worker or cache.
+
+- Source: 38,633 lines / 1,491,422 bytes → 37,720 lines / 1,454,762 bytes.
+- Destination: 947 lines / 39,584 bytes in `resource-reconciliation.ts`.
+- Mechanical comparison: 14 declarations and the complete availability
+  transaction are unchanged; all other function bodies remain unchanged.
+- Baseline: all three complete chat CI shards passed on predecessor `cbba30a526`.
+- Local baseline and after selections could not start PostgreSQL and skipped
+  the suite. They are not passes. Server typecheck and module boundaries pass.
+- Require complete chat CI on this slice before starting the next extraction.
+
+### 2026-10-12 channel-folder reassessment: slice 2
+
+PR #15823 was merged at the user's request. Rebase this slice onto the merged
+master, then retain the remaining four PRs for review in dependency order.
+
+- GitHub payload parsing, repository coordinate repair, webhook recovery,
+  repository pagination and bulk-selection entry points live in
+  `chat-channels/github/resources.ts`.
+- Telegram migration preparation and conversation migration live in
+  `telegram/resources.ts`. They receive the existing transaction and timestamp;
+  the shared coordinator still upserts the destination between those steps.
+- Slack fallback labels, Teams conversation IDs and Photon participant parsing
+  live in each provider's `resources.ts`.
+- Shared inventory replacement, availability settlement and audited selection
+  retain their transaction and credential-lease ownership. Small provider
+  dispatch predicates remain next to the shared operation they select.
+- All eight moved declarations and three transaction blocks retain their logic.
+  The GitHub provider guard stays in the caller. No factory starts background work.
+- Existing public-service tests: 15 resource cases and the Telegram migration
+  case passed before; the same 16 cases passed after. The name filter excludes
+  unrelated cases. No live third-party provider calls were made.
